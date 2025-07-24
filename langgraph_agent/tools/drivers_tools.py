@@ -9,7 +9,7 @@ import config
 @tool
 def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict]:
     """
-    Get drivers for a specific city with full details.
+    Get drivers for a specific city with full details - OPTIMIZED VERSION.
     
     Args:
         city: The city name to search for drivers
@@ -22,7 +22,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
     print(f"🔍 Getting drivers for {city} (page {page}, limit {limit})")
     
     try:
-        # Step 1: Get premium drivers
+        # Step 1: Get premium drivers with timeout
         premium_url = f"{config.BASE_URL}/{config.GET_DRIVERS_URL}"
         premium_data = {
             "city": city,
@@ -31,8 +31,8 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
             "timestamp": int(time.time())
         }
         
-        print(f"📡 Calling premium drivers API: {premium_url}")
-        response = requests.post(url=premium_url, data=premium_data, timeout=30)
+        print(f"📡 Calling premium drivers API...")
+        response = requests.post(url=premium_url, data=premium_data, timeout=15)  # Reduced timeout
         
         if response.status_code != 200:
             print(f"❌ Premium drivers API error: {response.status_code}")
@@ -49,121 +49,114 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
         if not premium_drivers:
             return []
         
-        # Step 2: Get detailed info for each driver
+        # Step 2: Get detailed info for ALL drivers in parallel - OPTIMIZED
         drivers_with_details = []
         
-        for premium_driver in premium_drivers:
+        def fetch_driver_details(premium_driver):
+            """Fetch driver details with timeout and error handling"""
             try:
                 driver_id = premium_driver.get("id")
                 if not driver_id:
-                    continue
+                    return None
                 
-                print(f"🔍 Getting details for driver {driver_id}")
-                
-                # Get driver details
                 details_url = f"{config.BASE_URL}/{config.GET_PARTNER_DATA_URL}"
                 details_data = {
                     "partnerId": driver_id,
                     "timestamp": int(time.time())
                 }
                 
-                details_response = requests.post(url=details_url, data=details_data, timeout=30)
+                # Faster timeout for individual requests
+                details_response = requests.post(url=details_url, data=details_data, timeout=10)
                 
                 if details_response.status_code == 200:
                     details_result = details_response.json()
                     if details_result.get("success", False):
                         details = details_result.get("data", {})
                         
-                        # Get profile image
-                        profile_image = None
-                        if premium_driver.get("photos") and len(premium_driver["photos"]) > 0:
-                            photos = premium_driver["photos"][0]
-                            if "full" in photos and "url" in photos["full"]:
-                                profile_image = photos["full"]["url"]
-                        
-                        # Combine premium info with details
-                        combined_driver = {
-                            # Basic info from premium driver
-                            "id": driver_id,
-                            "name": premium_driver.get("name", "Unknown"),
-                            "city": premium_driver.get("city", city),
-                            "phone": premium_driver.get("phoneNo", ""),
-                            "username": premium_driver.get("userName", ""),
-                            "profile_image": profile_image,
-                            
-                            # Details from driver details API
-                            "age": details.get("age"),
-                            "experience": details.get("experience", 0),
-                            "bio": details.get("driverBio", ""),
-                            "connections": details.get("connections", 0),
-                            "is_pet_allowed": details.get("isPetAllowed", False),
-                            "is_married": details.get("married", False),
-                            "languages": details.get("languages", []),
-                            "trip_types": details.get("tripTypes", []),
-                            "routes": [],
-                            "verified_languages": [],
-                            
-                            # Vehicle info (simplified)
-                            "vehicles": []
-                        }
-                        
-                        # Add route information
-                        for route in details.get("routes", []):
-                            route_info = {
-                                "from": route.get("from", ""),
-                                "to": route.get("to", "")
-                            }
-                            combined_driver["routes"].append(route_info)
-                        
-                        # Add verified languages
-                        for lang in details.get("verifiedLanguages", []):
-                            lang_info = {
-                                "name": lang.get("name", ""),
-                                "verified": lang.get("verified", False)
-                            }
-                            combined_driver["verified_languages"].append(lang_info)
-                        
-                        # Add vehicle information from premium driver data
-                        for vehicle in premium_driver.get("verifiedVehicles", []):
-                            vehicle_info = {
-                                "model": vehicle.get("model", "Unknown"),
-                                "type": vehicle.get("vehicleType", "Unknown"),
-                                "reg_no": vehicle.get("reg_no", ""),
-                                "per_km_cost": float(vehicle.get("perKmCost", 0)) if vehicle.get("perKmCost") else 0.0,
-                                "is_commercial": vehicle.get("is_commercial", False),
-                                "images": []
-                            }
-                            
-                            # Add vehicle images
-                            for image in vehicle.get("images", []):
-                                if "full" in image and "url" in image["full"]:
-                                    image_info = {
-                                        "type": image.get("type", "unknown"),
-                                        "url": image["full"]["url"],
-                                        "verified": image.get("verified", False)
-                                    }
-                                    vehicle_info["images"].append(image_info)
-                            
-                            combined_driver["vehicles"].append(vehicle_info)
-                        
-                        drivers_with_details.append(combined_driver)
-                        print(f"✅ Successfully processed driver {combined_driver['name']}")
-                        
+                        # Process driver data quickly
+                        return process_driver_data(premium_driver, details, driver_id)
                     else:
-                        print(f"⚠️ Driver details API returned success=False for {driver_id}")
+                        print(f"⚠️ Details API failed for {driver_id}")
+                        return None
                 else:
-                    print(f"⚠️ Driver details API error {details_response.status_code} for {driver_id}")
-                    
+                    print(f"⚠️ HTTP {details_response.status_code} for {driver_id}")
+                    return None
+                        
             except Exception as e:
-                print(f"⚠️ Error processing driver {driver_id}: {e}")
-                continue
+                print(f"⚠️ Error fetching {premium_driver.get('id', 'unknown')}: {e}")
+                return None
         
-        print(f"✅ Successfully processed {len(drivers_with_details)} drivers with full details")
+        # Use ThreadPoolExecutor with higher concurrency and timeout
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        print(f"🚀 Fetching details for {len(premium_drivers)} drivers in parallel...")
+        start_time = time.time()
+        
+        with ThreadPoolExecutor(max_workers=10) as executor:  # Increased workers
+            # Submit all tasks
+            future_to_driver = {
+                executor.submit(fetch_driver_details, driver): driver 
+                for driver in premium_drivers
+            }
+            
+            # Collect results with timeout
+            for future in as_completed(future_to_driver, timeout=30):  # 30 sec max total
+                try:
+                    result = future.result(timeout=5)  # 5 sec per individual request
+                    if result:
+                        drivers_with_details.append(result)
+                except Exception as e:
+                    driver = future_to_driver[future]
+                    print(f"⚠️ Timeout/error for {driver.get('id', 'unknown')}: {e}")
+        
+        elapsed = time.time() - start_time
+        print(f"✅ Processed {len(drivers_with_details)} drivers in {elapsed:.2f} seconds")
         return drivers_with_details
         
     except Exception as e:
         print(f"❌ Error in get_drivers_for_city: {e}")
         return []
+
+def process_driver_data(premium_driver, details, driver_id):
+    """Quickly process driver data without complex operations"""
+    # Get profile image quickly
+    profile_image = None
+    photos = premium_driver.get("photos", [])
+    if photos and photos[0].get("full", {}).get("url"):
+        profile_image = photos[0]["full"]["url"]
+    
+    # Process vehicles quickly
+    vehicles = []
+    for vehicle in premium_driver.get("verifiedVehicles", []):
+        vehicle_info = {
+            "model": vehicle.get("model", "Unknown"),
+            "type": vehicle.get("vehicleType", "Unknown"),
+            "reg_no": vehicle.get("reg_no", ""),
+            "per_km_cost": float(vehicle.get("perKmCost", 0)) if vehicle.get("perKmCost") else 0.0,
+            "is_commercial": vehicle.get("is_commercial", False)
+        }
+        vehicles.append(vehicle_info)
+    
+    # Create combined driver data - minimal processing
+    return {
+        "id": driver_id,
+        "name": premium_driver.get("name", "Unknown"),
+        "city": premium_driver.get("city", ""),
+        "phone": premium_driver.get("phoneNo", ""),
+        "username": premium_driver.get("userName", ""),
+        "profile_image": profile_image,
+        "age": details.get("age"),
+        "experience": details.get("experience", 0),
+        "bio": details.get("driverBio", ""),
+        "connections": details.get("connections", 0),
+        "is_pet_allowed": details.get("isPetAllowed", False),
+        "is_married": details.get("married", False),
+        "languages": details.get("languages", []),
+        "trip_types": details.get("tripTypes", []),
+        "routes": [{"from": r.get("from", ""), "to": r.get("to", "")} for r in details.get("routes", [])],
+        "verified_languages": [{"name": l.get("name", ""), "verified": l.get("verified", False)} for l in details.get("verifiedLanguages", [])],
+        "vehicles": vehicles
+    }
 
 
 @tool  

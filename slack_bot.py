@@ -71,7 +71,7 @@ def is_duplicate_message(event: dict) -> bool:
     return False
 
 def process_message(user_id: str, message: str) -> str:
-    """Process user message through cab agent"""
+    """Process user message through cab agent - OPTIMIZED"""
     print(f"🔄 Processing for {user_id}: {message}")
     
     # Get user state
@@ -85,10 +85,23 @@ def process_message(user_id: str, message: str) -> str:
     # Add message to chat history
     state["chat_history"].append(HumanMessage(content=message))
     
-    # Process through your existing agent
+    # Process through your existing agent with timeout
     try:
         print(f"🤖 Invoking agent...")
-        result = cab_agent.invoke(state)
+        import signal
+        
+        # Set a timeout for the agent call
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Agent call timed out")
+        
+        # Set timeout to 45 seconds
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(45)
+        
+        try:
+            result = cab_agent.invoke(state)
+        finally:
+            signal.alarm(0)  # Cancel the alarm
         
         # Ensure result is valid
         if not isinstance(result, dict):
@@ -133,6 +146,9 @@ def process_message(user_id: str, message: str) -> str:
         
         return response
         
+    except TimeoutError:
+        print(f"⏰ Agent call timed out for {user_id}")
+        return "Sorry, that request is taking too long. Please try again with a simpler query or type 'reset'."
     except Exception as e:
         print(f"❌ Error processing message: {e}")
         import traceback
@@ -141,7 +157,7 @@ def process_message(user_id: str, message: str) -> str:
 
 @slack_bot.post("/slack/events")
 async def handle_slack_events(request: Request):
-    """Handle Slack events - KISS version with better duplicate prevention"""
+    """Handle Slack events - OPTIMIZED version with immediate feedback"""
     data = await request.json()
     
     # URL verification
@@ -168,14 +184,25 @@ async def handle_slack_events(request: Request):
         
         print(f"📨 Processing: {user_id} -> {text}")
         
-        # Process message
+        # Send immediate acknowledgment for search queries
+        if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
+            try:
+                slack_client.chat_postMessage(
+                    channel=channel,
+                    text="🔍 Searching for drivers... This may take a moment."
+                )
+                print("📤 Sent immediate acknowledgment")
+            except:
+                pass  # Don't fail if acknowledgment fails
+        
+        # Process message (this is the slow part)
         response = process_message(user_id, text)
         
         # Ensure we have a valid response
         if not response or not response.strip():
             response = "I'm here to help you find drivers! Please tell me your pickup location."
         
-        # Send response only once
+        # Send final response
         try:
             slack_client.chat_postMessage(
                 channel=channel,
