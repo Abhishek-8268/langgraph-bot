@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 
 
+
 def initialize_state() -> dict:
     """Initialize the conversation state."""
     return {
@@ -37,7 +38,7 @@ def extract_bot_response(state: dict) -> str:
         # First check if there's a direct last_bot_response
         if isinstance(state, dict) and state.get("last_bot_response"):
             return state["last_bot_response"]
-        
+
         # Otherwise, look for the last AI message in chat history
         chat_history = state.get("chat_history", []) if isinstance(state, dict) else []
         if chat_history:
@@ -48,9 +49,9 @@ def extract_bot_response(state: dict) -> str:
                     if 'AI' in msg_type or 'Assistant' in msg_type:
                         if msg.content:
                             return msg.content
-        
+
         return "I'm here to help you find drivers. What would you like to know?"
-        
+
     except Exception as e:
         print(f"Debug - Error extracting response: {e}")
         return "I'm ready to help you with your cab booking needs."
@@ -63,7 +64,7 @@ def print_state_info(state: dict):
         filtered_count = len(state.get("filtered_drivers", []))
         pickup = state.get("pickup_location", "Not set")
         filters = state.get("applied_filters", {})
-        
+
         if drivers_count > 0 or pickup != "Not set":
             print(f"\n📊 Status: {drivers_count} total drivers, {filtered_count} after filters")
             if pickup != "Not set":
@@ -80,29 +81,29 @@ def run_graph_safely(state: dict) -> dict:
     try:
         # Use invoke instead of stream for more reliability
         print("🤔 Thinking...", end="", flush=True)
-        
+
         final_state = app.invoke(state)
-        
+
         # Clear the thinking message
         print("\r" + " " * 20 + "\r", end="", flush=True)
-        
+
         # Ensure we got a valid state back
         if not isinstance(final_state, dict):
             print(f"⚠️ Warning: Got non-dict state: {type(final_state)}")
             return state
-        
+
         # Ensure required keys exist
         required_keys = ["chat_history", "drivers_with_full_details", "filtered_drivers"]
         for key in required_keys:
             if key not in final_state:
                 final_state[key] = state.get(key, [] if key.endswith("drivers") or key == "chat_history" else None)
-        
+
         return final_state
-        
+
     except Exception as e:
         print(f"\r❌ Error processing request: {e}")
         print(f"Debug - State keys: {list(state.keys()) if isinstance(state, dict) else 'Not a dict'}")
-        
+
         # Return original state with error message
         error_state = dict(state)
         error_state["last_bot_response"] = "I encountered an issue processing your request. Please try again."
@@ -111,25 +112,25 @@ def run_graph_safely(state: dict) -> dict:
 
 def main():
     """Main function to run the interactive cab booking bot."""
-    
+
     # Initialize conversation state
     current_state = initialize_state()
-    
+
     while True:
         try:
             # Get user input
             user_input = input("You: ").strip()
-            
+
             # Handle exit command
             if user_input.lower() in ['exit', 'quit', 'bye']:
                 print("\n👋 Bot: Thank you for using our cab booking service! Goodbye!")
                 break
-            
+
             # Handle empty input
             if not user_input:
                 print("Bot: Please tell me what you need help with.")
                 continue
-            
+
             # Handle special commands
             if user_input.lower() == 'status':
                 print_state_info(current_state)
@@ -154,23 +155,23 @@ def main():
                     print(f"Chat history length: {len(current_state.get('chat_history', []))}")
                     print(f"Drivers count: {len(current_state.get('drivers_with_full_details', []))}")
                 continue
-            
+
             # Add user message to chat history
             if "chat_history" not in current_state:
                 current_state["chat_history"] = []
             current_state["chat_history"].append(HumanMessage(content=user_input))
-            
+
             # Process through the graph
             current_state = run_graph_safely(current_state)
-            
+
             # Extract and display bot response
             bot_response = extract_bot_response(current_state)
             print(f"🤖 Bot: {bot_response}")
-            
+
             # Show status if we have useful information
             if current_state.get("drivers_with_full_details") or current_state.get("pickup_location"):
                 print_state_info(current_state)
-                
+
         except KeyboardInterrupt:
             print("\n\n👋 Bot: Goodbye!")
             break
