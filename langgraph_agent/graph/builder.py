@@ -3,7 +3,7 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
 from langchain_google_vertexai import ChatVertexAI
 
-# Import simplified tools that work with Vertex AI
+
 from langgraph_agent.tools.drivers_tools import (
     get_drivers_for_city,
     get_drivers_with_pagination,
@@ -11,7 +11,7 @@ from langgraph_agent.tools.drivers_tools import (
     get_driver_details
 )
 
-# --- Tool Configuration ---
+
 tools = [
     get_drivers_for_city,
     get_drivers_with_pagination,
@@ -33,11 +33,11 @@ def agent_node(state: dict) -> dict:
 
 WORKFLOW:
 1. When a user provides a pickup location/city, use `get_drivers_for_city` to fetch drivers for that city.
-2. After getting drivers, present the top 5 in a friendly, readable format with key details like is name, age, vehicle, and languages.
+2. After getting drivers, present the top 5 in a friendly, readable format with key details like is name, age, vehicle, languages and "Profile_Link": https://cabswale.ai/profile/{userName} (here you have to use the driver userName that you get from `userName` after fetching the data from api).
 3. If users want to filter drivers, use the `filter_drivers` tool with the current driver list.
 4. For detailed information about a specific driver, use `get_driver_details` with the driver's ID.
-5.After getting the detailed information about a specific driver presnt it in a paragarph of  6-7 lines
-6. Only show the contact/phone number and profile url when user ask for it or if user say book the drivers otherwise hide it , when user say to book/call a specific driver show the contact details of that driver and the "Profile_Link": https://cabswale.ai/profile/{userName} (here you have to use the driver userName that you get from `userName` after fetching the data from api)
+5.After getting the detailed information about a specific driver presnt it in a paragarph of  6-7 lines 
+6. when use say book/call then show  contact/phone number and profile url when user ask for it or if user say book the drivers otherwise hide it , when user say to book/call a specific driver show the contact details of that driver and the "Profile_Link": https://cabswale.ai/profile/{userName} (here you have to use the driver userName that you get from `userName` after fetching the data from api)
 7. Always be conversational and helpful. Present information in a user-friendly way.
 8. If the user try to deviate or wants to talk about somethings else other than cab booking then try to tell user you can only provide cab assistance
 

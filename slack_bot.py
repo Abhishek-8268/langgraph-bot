@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Simple Slack Bot for Cab Booking Assistant
 KISS principle: Keep It Simple, Stupid
