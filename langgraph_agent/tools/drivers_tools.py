@@ -9,7 +9,7 @@ import config
 @tool
 def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict]:
     """
-    Get drivers for a specific city with full details - OPTIMIZED VERSION.
+    Get drivers for a specific city with full details - BATCH OPTIMIZED VERSION.
     
     Args:
         city: The city name to search for drivers
@@ -32,7 +32,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
         }
         
         print(f"📡 Calling premium drivers API...")
-        response = requests.post(url=premium_url, data=premium_data, timeout=15)  # Reduced timeout
+        response = requests.post(url=premium_url, data=premium_data, timeout=15)
         
         if response.status_code != 200:
             print(f"❌ Premium drivers API error: {response.status_code}")
@@ -44,9 +44,10 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
             return []
         
         premium_drivers = premium_result.get("data", [])
-        print(f"📋 Found {len(premium_drivers)} premium drivers")
+        print(f"📋 Found {len(premium_drivers)} premium drivers on page {page}")
         
         if not premium_drivers:
+            print(f"📄 No drivers found on page {page}")
             return []
         
         # Step 2: Get detailed info for ALL drivers in parallel - OPTIMIZED
@@ -66,7 +67,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
                 }
                 
                 # Faster timeout for individual requests
-                details_response = requests.post(url=details_url, data=details_data, timeout=10)
+                details_response = requests.post(url=details_url, data=details_data, timeout=8)
                 
                 if details_response.status_code == 200:
                     details_result = details_response.json()
@@ -92,7 +93,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
         print(f"🚀 Fetching details for {len(premium_drivers)} drivers in parallel...")
         start_time = time.time()
         
-        with ThreadPoolExecutor(max_workers=10) as executor:  # Increased workers
+        with ThreadPoolExecutor(max_workers=12) as executor:  # Increased workers for 10 drivers
             # Submit all tasks
             future_to_driver = {
                 executor.submit(fetch_driver_details, driver): driver 
@@ -100,9 +101,9 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
             }
             
             # Collect results with timeout
-            for future in as_completed(future_to_driver, timeout=30):  # 30 sec max total
+            for future in as_completed(future_to_driver, timeout=25):  # 25 sec max total
                 try:
-                    result = future.result(timeout=5)  # 5 sec per individual request
+                    result = future.result(timeout=3)  # 3 sec per individual request
                     if result:
                         drivers_with_details.append(result)
                 except Exception as e:
@@ -116,6 +117,88 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
     except Exception as e:
         print(f"❌ Error in get_drivers_for_city: {e}")
         return []
+
+
+@tool
+def get_drivers_with_pagination(city: str, max_pages: int = 5, filters: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Get drivers with smart pagination and filtering.
+    Fetches up to max_pages (50 drivers max) until enough filtered drivers are found.
+    
+    Args:
+        city: The city name to search for drivers
+        max_pages: Maximum pages to fetch (default: 5, max 50 drivers)
+        filters: Optional filters to apply during fetching
+    
+    Returns:
+        Dictionary with drivers, pagination info, and filtering results
+    """
+    print(f"🔍 Smart driver search for {city} (max {max_pages} pages, filters: {filters})")
+    
+    all_drivers = []
+    filtered_drivers = []
+    current_page = 1
+    pages_fetched = 0
+    
+    # Continue fetching until we have enough drivers or hit max pages
+    while current_page <= max_pages and pages_fetched < max_pages:
+        print(f"📄 Fetching page {current_page}...")
+        
+        # Fetch drivers for current page
+        page_drivers = get_drivers_for_city.invoke({
+            "city": city,
+            "page": current_page,
+            "limit": 10
+        })
+        
+        if not page_drivers:
+            print(f"📄 No more drivers on page {current_page}, stopping")
+            break
+            
+        all_drivers.extend(page_drivers)
+        pages_fetched += 1
+        print(f"📊 Total drivers so far: {len(all_drivers)}")
+        
+        # Apply filters if provided
+        if filters:
+            # Filter all drivers we have so far
+            current_filtered = filter_drivers.invoke({
+                "drivers": all_drivers,
+                "filters": filters
+            })
+            
+            print(f"🔍 After filtering: {len(current_filtered)} drivers match criteria")
+            
+            # If we have enough filtered drivers (5+), we can stop
+            if len(current_filtered) >= 5:
+                filtered_drivers = current_filtered
+                print(f"✅ Found enough filtered drivers ({len(filtered_drivers)}), stopping search")
+                break
+                
+        current_page += 1
+    
+    # Final filtering if no filters were applied during pagination
+    if not filters:
+        filtered_drivers = all_drivers
+    elif not filtered_drivers:  # If we didn't find enough during pagination
+        filtered_drivers = filter_drivers.invoke({
+            "drivers": all_drivers,
+            "filters": filters
+        })
+    
+    result = {
+        "all_drivers": all_drivers,
+        "filtered_drivers": filtered_drivers,
+        "total_drivers": len(all_drivers),
+        "filtered_count": len(filtered_drivers),
+        "pages_searched": pages_fetched,
+        "max_pages_reached": pages_fetched >= max_pages,
+        "filters_applied": filters or {},
+        "city": city
+    }
+    
+    print(f"🎯 Final result: {len(all_drivers)} total, {len(filtered_drivers)} filtered from {pages_fetched} pages")
+    return result
 
 def process_driver_data(premium_driver, details, driver_id):
     """Quickly process driver data without complex operations"""
