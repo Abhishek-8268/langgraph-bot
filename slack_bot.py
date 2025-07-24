@@ -157,7 +157,7 @@ def process_message(user_id: str, message: str) -> str:
 
 @slack_bot.post("/slack/events")
 async def handle_slack_events(request: Request):
-    """Handle Slack events - OPTIMIZED version with immediate feedback"""
+    """Handle Slack events - FIXED for multi-user access"""
     data = await request.json()
     
     # URL verification
@@ -177,23 +177,26 @@ async def handle_slack_events(request: Request):
         user_id = event.get("user")
         channel = event.get("channel") 
         text = event.get("text", "").strip()
+        channel_type = event.get("channel_type", "")
         
         # Skip if no text
         if not text:
             return {"status": "ok"}
         
-        print(f"📨 Processing: {user_id} -> {text}")
+        print(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
         
         # Send immediate acknowledgment for search queries
         if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
             try:
+                # Try to send acknowledgment
                 slack_client.chat_postMessage(
                     channel=channel,
                     text="🔍 Searching for drivers... This may take a moment."
                 )
                 print("📤 Sent immediate acknowledgment")
-            except:
-                pass  # Don't fail if acknowledgment fails
+            except Exception as ack_error:
+                print(f"⚠️ Failed to send acknowledgment: {ack_error}")
+                # Don't fail the whole process if acknowledgment fails
         
         # Process message (this is the slow part)
         response = process_message(user_id, text)
@@ -202,24 +205,55 @@ async def handle_slack_events(request: Request):
         if not response or not response.strip():
             response = "I'm here to help you find drivers! Please tell me your pickup location."
         
-        # Send final response
+        # Send final response with multiple fallback strategies
+        success = False
+        
+        # Strategy 1: Try original channel
         try:
             slack_client.chat_postMessage(
                 channel=channel,
-                text=f"Cabswale 🚗 -> {response}"
+                text=f"🚗 {response}"
             )
-            print(f"✅ Sent response to {channel}")
+            print(f"✅ Sent response to channel {channel}")
+            success = True
         except Exception as e:
             print(f"❌ Failed to send to channel {channel}: {e}")
-            # Fallback: try sending as DM to user
+        
+        # Strategy 2: If channel failed, try user DM with conversation
+        if not success:
+            try:
+                # First open a DM conversation with the user
+                dm_response = slack_client.conversations_open(users=[user_id])
+                if dm_response["ok"]:
+                    dm_channel = dm_response["channel"]["id"]
+                    slack_client.chat_postMessage(
+                        channel=dm_channel,
+                        text=f"🚗 {response}\n\n_Note: I'm replying here because I don't have access to send messages in the other channel._"
+                    )
+                    print(f"✅ Sent as DM to {user_id} via opened conversation")
+                    success = True
+                else:
+                    print(f"❌ Failed to open DM with {user_id}: {dm_response}")
+            except Exception as dm_error:
+                print(f"❌ Failed to send DM via conversation: {dm_error}")
+        
+        # Strategy 3: Last resort - try direct user ID
+        if not success:
             try:
                 slack_client.chat_postMessage(
-                    channel=user_id,  # Send as DM
-                    text=f"Cabswale 🚗 -> {response}\n\n_Note: I replied here because I don't have access to that channel. Add me to the channel or DM me directly!_"
+                    channel=user_id,
+                    text=f"🚗 {response}\n\n_Note: Having trouble with channel permissions. You might need to add me to the channel or your admin needs to update my permissions._"
                 )
-                print(f"✅ Sent as DM to {user_id} instead")
-            except Exception as dm_error:
-                print(f"❌ Also failed to send DM: {dm_error}")
+                print(f"✅ Sent as direct DM to {user_id}")
+                success = True
+            except Exception as direct_error:
+                print(f"❌ Failed direct DM: {direct_error}")
+        
+        # Strategy 4: If all else fails, log the issue
+        if not success:
+            print(f"❌ COMPLETE FAILURE to send message to user {user_id}")
+            print(f"   Response was: {response[:100]}...")
+            # You might want to store this in a database or send to an error channel
     
     return {"status": "ok"}
 
@@ -231,11 +265,11 @@ async def handle_slash_commands(request: Request):
     text = form_data.get("text", "").strip()
     
     if not text:
-        response = "Cabswale 🚗 -> Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
+        response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
     else:
         response = process_message(user_id, text)
     
-    return {"text": f"Cabswale 🚗 -> {response}"}
+    return {"text": f"🚗 {response}"}
 
 @slack_bot.get("/test_agent/{message}")
 async def test_agent_directly(message: str):
