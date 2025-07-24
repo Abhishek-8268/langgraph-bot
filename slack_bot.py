@@ -206,7 +206,7 @@ async def handle_slack_events(request: Request):
         try:
             slack_client.chat_postMessage(
                 channel=channel,
-                text=f"🚗 {response}"
+                text=f"Cabswale 🚗 -> {response}"
             )
             print(f"✅ Sent response to {channel}")
         except Exception as e:
@@ -215,7 +215,7 @@ async def handle_slack_events(request: Request):
             try:
                 slack_client.chat_postMessage(
                     channel=user_id,  # Send as DM
-                    text=f"🚗 {response}\n\n_Note: I replied here because I don't have access to that channel. Add me to the channel or DM me directly!_"
+                    text=f"Cabswale 🚗 -> {response}\n\n_Note: I replied here because I don't have access to that channel. Add me to the channel or DM me directly!_"
                 )
                 print(f"✅ Sent as DM to {user_id} instead")
             except Exception as dm_error:
@@ -231,11 +231,11 @@ async def handle_slash_commands(request: Request):
     text = form_data.get("text", "").strip()
     
     if not text:
-        response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
+        response = "Cabswale 🚗 -> Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
     else:
         response = process_message(user_id, text)
     
-    return {"text": f"🚗 {response}"}
+    return {"text": f"Cabswale 🚗 -> {response}"}
 
 @slack_bot.get("/test_agent/{message}")
 async def test_agent_directly(message: str):
