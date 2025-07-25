@@ -188,11 +188,13 @@ async def handle_slack_events(request: Request):
         if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
             try:
                 # Try to send acknowledgment
-                slack_client.chat_postMessage(
-                    channel=channel,
-                    text="🔍 Searching for drivers... This may take a moment."
-                )
-                print("📤 Sent immediate acknowledgment")
+               slack_client.chat_postMessage(
+               channel=channel,
+               text=f"🚗 {response}",
+               as_user=False,  # This is crucial!
+               username="Cab Bot"
+               )
+               print("📤 Sent immediate acknowledgment")
             except Exception as ack_error:
                 print(f"⚠️ Failed to send acknowledgment: {ack_error}")
                 # Don't fail the whole process if acknowledgment fails
