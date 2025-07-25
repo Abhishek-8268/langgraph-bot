@@ -39,86 +39,86 @@ def is_duplicate_message(event: dict) -> bool:
     text = event.get("text", "").strip()
     timestamp = event.get("ts", "")
     event_ts = event.get("event_ts", "")
-    
+
     # Create multiple unique identifiers
     identifiers = [
         f"{user_id}:{text}:{timestamp}",
         f"{user_id}:{timestamp}",
         f"event:{event_ts}" if event_ts else None
     ]
-    
+
     # Remove None values
     identifiers = [id for id in identifiers if id]
-    
+
     # Check if any identifier was already processed
     for identifier in identifiers:
         if identifier in processed_messages:
             print(f"🔄 Duplicate detected: {identifier}")
             return True
-    
+
     # Add all identifiers to processed set
     for identifier in identifiers:
         processed_messages.add(identifier)
-    
+
     # Keep only last 200 messages to prevent memory leak
     if len(processed_messages) > 200:
         # Keep only the newest 100
         new_set = set(list(processed_messages)[-100:])
         processed_messages.clear()
         processed_messages.update(new_set)
-    
+
     return False
 
 def process_message(user_id: str, message: str) -> str:
     """Process user message through cab agent - OPTIMIZED"""
     print(f"🔄 Processing for {user_id}: {message}")
-    
+
     # Get user state
     state = get_user_state(user_id)
-    
+
     # Handle simple commands
     if message.lower().strip() == "reset":
         user_conversations[user_id] = get_user_state("new_user")  # Reset
         return "🔄 Reset! Tell me your pickup location to find drivers."
-    
+
     # Add message to chat history
     state["chat_history"].append(HumanMessage(content=message))
-    
+
     # Process through your existing agent with timeout
     try:
         print(f"🤖 Invoking agent...")
         import signal
-        
+
         # Set a timeout for the agent call
         def timeout_handler(signum, frame):
             raise TimeoutError("Agent call timed out")
-        
+
         # Set timeout to 45 seconds
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(45)
-        
+
         try:
             result = cab_agent.invoke(state)
         finally:
             signal.alarm(0)  # Cancel the alarm
-        
+
         # Ensure result is valid
         if not isinstance(result, dict):
             print(f"⚠️ Agent returned non-dict: {type(result)}")
             return "Sorry, I had a technical issue. Please try again."
-        
+
         # Update state
         user_conversations[user_id] = result
         print(f"✅ State updated for {user_id}")
-        
+
         # Extract response with better fallbacks
         response = None
-        
+
         # Try 1: Direct last_bot_response
         if result.get("last_bot_response"):
             response = result["last_bot_response"]
             print(f"📤 Got direct response: {response[:50]}...")
-        
+
         # Try 2: Last AI message from chat history
         if not response:
             chat_history = result.get("chat_history", [])
@@ -128,23 +128,23 @@ def process_message(user_id: str, message: str) -> str:
                         response = msg.content
                         print(f"📤 Got AI message: {response[:50]}...")
                         break
-        
+
         # Try 3: Check if we have drivers and create a response
         if not response:
             drivers = result.get("drivers_with_full_details", [])
             filtered_drivers = result.get("filtered_drivers", [])
-            
+
             if drivers or filtered_drivers:
                 response = f"I found {len(drivers or filtered_drivers)} drivers for you. Please let me know what specific information you'd like about them."
                 print(f"📤 Generated fallback response")
-            
+
         # Final fallback
         if not response or not response.strip():
             response = "I'm here to help you find drivers! Please tell me your pickup location or what you're looking for."
             print(f"📤 Using final fallback response")
-        
+
         return response
-        
+
     except TimeoutError:
         print(f"⏰ Agent call timed out for {user_id}")
         return "Sorry, that request is taking too long. Please try again with a simpler query or type 'reset'."
@@ -158,32 +158,32 @@ def process_message(user_id: str, message: str) -> str:
 async def handle_slack_events(request: Request):
     """Handle Slack events - FIXED for multi-user access"""
     data = await request.json()
-    
+
     # URL verification
     if "challenge" in data:
         return {"challenge": data["challenge"]}
-    
+
     # Handle messages
     event = data.get("event", {})
-    if (event.get("type") == "message" and 
-        "bot_id" not in event and 
+    if (event.get("type") == "message" and
+        "bot_id" not in event and
         "subtype" not in event):
-        
+
         # Skip if duplicate event
         if is_duplicate_message(event):
             return {"status": "ok"}
-        
+
         user_id = event.get("user")
-        channel = event.get("channel") 
+        channel = event.get("channel")
         text = event.get("text", "").strip()
         channel_type = event.get("channel_type", "")
-        
+
         # Skip if no text
         if not text:
             return {"status": "ok"}
-        
+
         print(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
-        
+
         # Send immediate acknowledgment for search queries
         if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
             try:
@@ -196,17 +196,17 @@ async def handle_slack_events(request: Request):
             except Exception as ack_error:
                 print(f"⚠️ Failed to send acknowledgment: {ack_error}")
                 # Don't fail the whole process if acknowledgment fails
-        
+
         # Process message (this is the slow part)
         response = process_message(user_id, text)
-        
+
         # Ensure we have a valid response
         if not response or not response.strip():
             response = "I'm here to help you find drivers! Please tell me your pickup location."
-        
+
         # Send final response with multiple fallback strategies
         success = False
-        
+
         # Strategy 1: Try original channel
         try:
             slack_client.chat_postMessage(
@@ -217,7 +217,7 @@ async def handle_slack_events(request: Request):
             success = True
         except Exception as e:
             print(f"❌ Failed to send to channel {channel}: {e}")
-        
+
         # Strategy 2: If channel failed, try user DM with conversation
         if not success:
             try:
@@ -235,7 +235,7 @@ async def handle_slack_events(request: Request):
                     print(f"❌ Failed to open DM with {user_id}: {dm_response}")
             except Exception as dm_error:
                 print(f"❌ Failed to send DM via conversation: {dm_error}")
-        
+
         # Strategy 3: Last resort - try direct user ID
         if not success:
             try:
@@ -247,13 +247,13 @@ async def handle_slack_events(request: Request):
                 success = True
             except Exception as direct_error:
                 print(f"❌ Failed direct DM: {direct_error}")
-        
+
         # Strategy 4: If all else fails, log the issue
         if not success:
             print(f"❌ COMPLETE FAILURE to send message to user {user_id}")
             print(f"   Response was: {response[:100]}...")
             # You might want to store this in a database or send to an error channel
-    
+
     return {"status": "ok"}
 
 @slack_bot.post("/slack/commands")
@@ -262,12 +262,12 @@ async def handle_slash_commands(request: Request):
     form_data = await request.form()
     user_id = form_data.get("user_id")
     text = form_data.get("text", "").strip()
-    
+
     if not text:
         response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
     else:
         response = process_message(user_id, text)
-    
+
     return {"text": f"🚗 {response}"}
 
 @slack_bot.get("/test_agent/{message}")
@@ -277,7 +277,7 @@ async def test_agent_directly(message: str):
         test_user = "test_user"
         response = process_message(test_user, message)
         state = user_conversations.get(test_user, {})
-        
+
         return {
             "message": message,
             "response": response,
@@ -318,12 +318,12 @@ async def home():
     """Simple status page"""
     return {
         "status": "running",
-        "bot": "Cab Booking Assistant", 
+        "bot": "Cab Booking Assistant",
         "active_users": len(user_conversations),
         "processed_messages": len(processed_messages),
         "endpoints": {
             "events": "/slack/events",
-            "commands": "/slack/commands", 
+            "commands": "/slack/commands",
             "debug": "/debug/{user_id}",
             "clear_cache": "/clear_cache",
             "health": "/health"
@@ -337,15 +337,16 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     # Check environment
     if not os.environ.get("SLACK_BOT_TOKEN"):
         print("❌ Set SLACK_BOT_TOKEN environment variable")
         print("   export SLACK_BOT_TOKEN='xoxb-your-token'")
         exit(1)
-    
+
     print("🚀 Starting Cab Booking Slack Bot")
-    print("📍 Server: http://localhost:8000")
     print("🔗 Slack Events URL: https://your-ngrok-url.ngrok.io/slack/events")
-    
-    uvicorn.run(slack_bot, host="0.0.0.0", port=8000)
+
+    port = int(os.environ.get("PORT", 8000))
+    print(f"📍 Server: http://localhost:{port}")
+    uvicorn.run(slack_bot, host="0.0.0.0", port=port)
