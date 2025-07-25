@@ -1,8 +1,3 @@
-"""
-Simple Slack Bot for Cab Booking Assistant
-KISS principle: Keep It Simple, Stupid
-"""
-
 import os
 from fastapi import FastAPI, Request
 from slack_sdk import WebClient
