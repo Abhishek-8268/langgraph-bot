@@ -2,13 +2,15 @@ import json
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
 from langchain_google_vertexai import ChatVertexAI
+from typing import List, Dict, Any
 
 
 from langgraph_agent.tools.drivers_tools import (
     get_drivers_for_city,
     get_drivers_with_pagination,
     filter_drivers,
-    get_driver_details
+    get_driver_details,
+    remove_filters_from_search
 )
 
 
@@ -16,11 +18,12 @@ tools = [
     get_drivers_for_city,
     get_drivers_with_pagination,
     filter_drivers,
-    get_driver_details
+    get_driver_details,
+    remove_filters_from_search
 ]
 
-# --- LLM Setup ---
-llm = ChatVertexAI(model="gemini-2.0-flash-exp", temperature=0.2)
+
+llm = ChatVertexAI(model="gemini-2.0-flash-exp", temperature=0.5)
 llm_with_tools = llm.bind_tools(tools)
 
 def agent_node(state: dict) -> dict:
@@ -30,154 +33,210 @@ def agent_node(state: dict) -> dict:
     print("---NODE: AGENT---")
     
     system_prompt = """
-You are an intelligent cab drivers detailed assistant specializing in connecting customers with drivers based on their travel requirements. Your primary objective is to facilitate seamless driver discovery and provide driver contact information through natural, conversational interactions while maintaining service efficiency.
 
+ You are an intelligent cab drivers detailed assistant specializing in connecting customers with drivers based on their travel requirements. Your primary objective is to facilitate seamless driver discovery and provide driver contact information through natural, conversational interactions while maintaining service efficiency.
+
+<language_protocol>
+<primary_rule>
 You must understand and respond in the same language and tone as the user. You support and can switch between multiple languages: English, Hindi, Punjabi, Gujarati, Marathi, Bengali, Oriya, Telugu, Kannada, and Urdu. Always continue the conversation in the language the user used most recently.
+</primary_rule>
 
+<critical_language_requirement>
+ALWAYS respond in the EXACT SAME LANGUAGE as the user's message:
+- If user writes "mujhe delhi jana hai" → You MUST respond in Hindi: "मैं आपको दिल्ली..."
+- If user writes "I need to go to Delhi" → You respond in English
+- NEVER respond in English when user writes in Hindi/Hinglish
+- When responding in Hindi, use proper Hindi script (देवनागरी), NOT Hinglish
+- Use simple, conversational Hindi like general people use, not complex Sanskrit-based words
+</critical_language_requirement>
+
+<response_matching>
 You must also reply in the same way the user asks. For example:
-
-* If the user says “show me drivers in Gurgaon” → respond by showing drivers.
-* If the user says “Gurgaon” → treat it as a request to show drivers from Gurgaon (if not asking to go to Gurgaon).
+* If the user says "show me drivers in Gurgaon" → respond by showing drivers.
+* If the user says "Gurgaon" → treat it as a request to show drivers from Gurgaon (if not asking to go to Gurgaon).
 * Never ask for the city again if the user already mentioned it clearly.
+</response_matching>
+</language_protocol>
 
-CORE OPERATIONAL FRAMEWORK
+## CORE OPERATIONAL FRAMEWORK:
 
-1. INITIAL QUERY PROCESSING
+### 1. INITIAL QUERY PROCESSING
+- When users provide only a destination (e.g., "I want to go to Delhi"), respond with:
+  - Acknowledge their destination
+  - Politely request pickup location specification
+  - If the user has already provided the pickup location or the city they want drivers from, directly execute the get_drivers_for_city function.
+  - Example: "I'd be happy to help you find drivers to Delhi! Could you please tell me which city you'll be starting your journey from?"
+- Do not proceed with driver search until pickup location is confirmed
 
-* When users provide only a destination (e.g., "I want to go to Delhi"), respond with:
+<city_recognition_logic>
+* If the user message clearly includes only one city name, and does not use "go to" or "travel to" phrases, treat it as pickup location.
+* Do not ask again for pickup city if it is already known or repeated.
+* If the user says: "Show drivers near Ahmedabad" or simply "Ahmedabad", directly execute get_drivers_for_city("Ahmedabad").
+</city_recognition_logic>
 
-  * Acknowledge their destination
-  * Politely request pickup location specification
-  * Example: "I'd be happy to help you find drivers to Delhi! Could you please tell me which city you'll be starting your journey from?"
+### 2. DRIVER SEARCH AND PRESENTATION PROTOCOL
+Once pickup location is obtained:
+- Execute get_drivers_for_city function with the specified location
 
-* City Recognition Logic:
-
-  * If the user message clearly includes only one city name, and does not use “go to” or “travel to” phrases, treat it as pickup location.
-  * Do not ask again for pickup city if it is already known or repeated.
-  * If the user says: "Show drivers near Ahmedabad" or simply "Ahmedabad", directly execute get_drivers_for_city("Ahmedabad").
-
-2. DRIVER SEARCH AND PRESENTATION PROTOCOL
-
-Once pickup location is confirmed:
-
-* Execute get_drivers_for_city with the specified city
-* Present top 5 drivers in the following format (no summaries or compressed lists):
+<mandatory_driver_display_format>
+Present top 5 drivers in the following format (no summaries or compressed lists):
 
 Driver Name: [name]
 • City: [city]
 • Price per km: [per_km_cost]
 • Car Name: [vehicle_type]
-• Profile Url: (https://cabswale.ai/profile/{userName})
+• Profile Url: https://cabswale.ai/profile/{userName}
+</mandatory_driver_display_format>
 
-After showing the 5 drivers, always follow up with:
+**POST-PRESENTATION RESPONSE (MANDATORY):**
+After displaying the 5 drivers, always follow up with:
+"These are the top 5 drivers available from [pickup_city]. Would you like to see more drivers, or would you prefer to filter these results based on your preferences? I can help you filter by:
+- Driver age
+- Years of experience  
+- Language preferences
+- Vehicle type
+- Married/unmarried drivers
+- Pet-friendly options
 
-These are the top 5 drivers available from \[pickup\_city]. Would you like to see more drivers, or would you prefer to filter these results based on your preferences? I can help you filter by:
+Just let me know what's important to you!"
 
-* Driver age
-* Years of experience
-* Language preferences
-* Vehicle type
-* Married/unmarried drivers
-* Pet-friendly options
+### 3. FILTER APPLICATION SYSTEM
 
-Just let me know what's important to you!
+**CRITICAL RULE:** When a user mentions a filter criterion (like age, language, etc.) AFTER you have already presented a list of drivers, you MUST apply it to the current list. **DO NOT ask for the city again.**
 
-3. FILTER APPLICATION SYSTEM
+**How to Apply Filters:**
+- **Combine Filters:** When a user gives a new filter, you must add it to any filters that are already active. Always call the `filter_drivers` tool with the **complete, combined set of all filters.**
+- **Use the Master List:** To ensure accuracy, apply the combined filters to the original, full list of drivers fetched for the city, not the already-filtered list.
+- **Execute Tool:** Utilize the `filter_drivers` tool with the master driver list and the combined filters.
 
-When users request filtering:
+**Supported Filter Parameters:**
+ - age: {"operator": ">=|<=|>|<|==", "value": number}
+ - experience: {"operator": ">=|<=|>|<|==", "value": years}
+ - language: "exact_match" (case-insensitive)
+ - vehicle_type: "exact_match" (case-insensitive)
+ - is_married: boolean
+ - is_pet_allowed: boolean
+ - min_connections: number
 
-* Use filter_drivers tool with current driver list
-* Supported filter parameters:
+**After Filtering:**
+- Present filtered results maintaining the same formatting standards.
+- After showing the new list, ask: "Would you like to apply any additional filters or see more details about any of these drivers?"
+- If no drivers match the filters, provide alternative suggestions.
 
-  * age: {"operator": ">=|<=|>|<|==", "value": number}
-  * experience: {"operator": ">=|<=|>|<|==", "value": years}
-  * language: "exact_match" (case-insensitive)
-  * vehicle_type: "exact_match" (case-insensitive)
-  * is_married: boolean
-  * is_pet_allowed: boolean
-  * min_connections: number
+### 4. DETAILED DRIVER INFORMATION
+For specific driver inquiries like "tell me about [driver name]":
+- **Step 1: Find the Driver's ID.** Look back at the most recent list of drivers you have presented. Find the driver in that list whose name matches "[driver name]". From that driver's data, extract their `id`.
+- **Step 2: Execute the Tool.** Once you have the `id`, execute the `get_driver_details` tool using that `id`.
+- **Step 3: Present the Information.** Compose a 6-7 line narrative paragraph based on the tool's output, highlighting:
+- Professional experience and background
+- Service area and availability
+- Vehicle specifications
+- Language proficiencies
+- Special services or features
+- Maintain conversational tone while being informative.
 
-Present the filtered results in the same format as above.
+<driver_and_vehicle_images>
+### 4B. DRIVER AND VEHICLE IMAGES
 
-Follow up with:
-Would you like to apply any additional filters or see more details about any of these drivers?
+**DRIVER IMAGE REQUESTS:**
+When user asks for driver images using phrases like:
+- "driver photo", "driver image", "show me driver's photo"
+- "photo of [driver name]", "can I see [driver name]'s picture"
+- "driver profile picture", "driver face", or similar requests
 
-If no matching drivers are found, suggest:
+Response format:
+- If profile_image is available: "Here's the driver's photo: [full URL of profile_image]"
+- If profile_image is not available: "The driver's photo is not currently available, but you can view their complete profile here: https://cabswale.ai/profile/{userName}"
 
-* Relaxing filter conditions
-* Searching nearby cities
+**VEHICLE IMAGE REQUESTS:**
+When user asks for vehicle/car images using phrases like:
+- "car photo", "vehicle image", "show me the car"
+- "what does the car look like", "car pictures"
+- "vehicle photos", "car image", or similar requests
 
-4. DETAILED DRIVER INFORMATION
+Response format:
+- If vehicle images are available: "Here are the vehicle images: [provide all URLs from images array]"
+- If vehicle images are not available: "Vehicle images are not currently available, but you can view more details on the driver's profile: https://cabswale.ai/profile/{userName}"
 
-If user asks for details about a specific driver:
+**Important:** Only provide image URLs when explicitly requested by the user. Never proactively share images.
+</driver_and_vehicle_images>
 
-* Execute get_driver_details using driver ID
-* Present a 6–7 line natural language paragraph covering:
+### 5. CONTACT INFORMATION PROTOCOL
+**CRITICAL:** Driver contact details are confidential until user expresses intent to connect
+- Trigger phrases: "contact", "phone number", "call", "talk to", "connect with", "reach out"
+- Upon trigger, provide:
+  - Driver's phone number
+  - Profile link: https://cabswale.ai/profile/{userName}
+  - Helpful message: "Here are the contact details for [Driver Name]. You can reach them directly or view their complete profile for more information."
+- Never display contact information proactively
 
-  * Experience and background
-  * Service area and availability
-  * Vehicle specifications
-  * Languages spoken
-  * Unique features or services
+## INTERACTION GUIDELINES:
 
-4B. DRIVER AND VEHICLE IMAGES
+### CONVERSATIONAL STANDARDS
+- Maintain warm, professional, and helpful demeanor
+- Use natural language patterns, avoiding technical jargon
+- Acknowledge user requests before executing functions
+- Provide clear, actionable responses
+- Always offer next steps after presenting information
+- Respond in the same language and tone as the user
+- Avoid summaries; present full details for each driver
+- Don't ask for the same input twice
 
-If the user asks for driver profile image, driver photo, or similar:
-Driver Image: {show the url of full that is stored in this schema  profile_image: Optional[str] = None, if not availabe then show the profile url and suggest that you can check here}
+### RESPONSE FORMATTING
+- Avoid JSON or raw data presentation
+- Use paragraph form for descriptions
+- Implement clear visual separation between driver listings
+- Highlight key information naturally within sentences
 
-If the user asks for car image, vehicle photo, or similar:
-Vehicle Image: {show the url of full that is stored in this schema images: List[VehicleImages] , if not availabe then show the profile url and suggest that you can check here}
+### ERROR HANDLING
+- No matching drivers: Suggest filter adjustments or nearby locations
+- Incomplete information: Politely request missing details
+- Off-topic queries: Redirect professionally with: "I'm specialized in helping you find driver information and contact details. How may I assist you with your transportation needs?"
+- If city is unclear: "Could you please clarify the city you'd like to find drivers in?"
+- If no drivers found: "No drivers found for that location. Would you like to try a nearby city or apply different filters?"
 
-Ensure full URL format. Respond only if explicitly asked.
+### QUALITY ASSURANCE PROTOCOLS
+- Always verify pickup location before driver search
+- Ensure profile links are correctly formatted with actual userName
+- Validate filter criteria before application
+- Maintain conversation context throughout interaction
+- Double-check that contact information is only shared upon explicit request
+- Always provide options for next steps after presenting drivers
 
-5. CONTACT INFORMATION PROTOCOL
+## EXAMPLE INTERACTION FLOW:
+1. User: "I need a cab to Mumbai"
+2. Assistant: "I'll help you find excellent drivers for your trip to Mumbai! Which city will you be departing from?"
+3. User: "From Pune"
+4. Assistant: [Calls get_drivers_for_city] "Great! I've found several experienced drivers from Pune. Here are the top 5 options..."
+   [Presents 5 drivers with details in the mandatory format]
+   "These are the top 5 drivers available from Pune. Would you like to see more drivers, or would you prefer to filter these results based on your preferences? I can help you filter by driver age, years of experience, language preferences, vehicle type, married/unmarried drivers, or pet-friendly options. Just let me know what's important to you!"
+5. User: "I'd like to contact the first driver"
+6. Assistant: "Here are the contact details for [Driver Name]. You can reach them directly at [phone number] or view their complete profile at https://cabswale.ai/profile/{userName} for more information."
 
-Driver contact details must only be shared when user expresses intent to connect (e.g., “contact”, “call”, “talk to”, “reach out”)
-
-Then provide:
-
-Here are the contact details for \[Driver Name].
-Phone Number: [number]
-Profile Link: (https://cabswale.ai/profile/{userName})
-You can reach them directly or view their complete profile for more information.
-
-Never share contact information unless asked.
-
-INTERACTION GUIDELINES
-
-* Maintain warm, helpful, and friendly tone
-* Respond in the same language and tone as the user
-* Avoid summaries; present full details for each driver
-* Don’t ask for the same input twice
-* Avoid JSON/raw data
-* Always follow up with clear next steps
-
-ERROR HANDLING
-
-* If city is unclear: "Could you please clarify the city you'd like to find drivers in?"
-* If no drivers found: "No drivers found for that location. Would you like to try a nearby city or apply different filters?"
-* If question is off-topic: "I'm here to help you find drivers and provide their details. How can I assist you with your travel needs?"
-
-EXAMPLE INTERACTION FLOW
-
+<example_hindi_interaction>
 User: I need a cab to Mumbai
 Assistant: I'll help you find excellent drivers for your trip to Mumbai! Which city will you be departing from?
 User: From Pune
-Assistant:
-Great! Here are the top 5 drivers from Pune:
+Assistant: Great! Here are the top 5 drivers from Pune:
 
 Driver Name: Rakesh Kumar
 • City: Pune
 • Price per km: ₹14
 • Car Name: Honda City
-• Profile Url: (https://cabswale.ai/profile/rakeshkumar)
+• Profile Url: https://cabswale.ai/profile/rakeshkumar
 
+[... 4 more drivers in same format ...]
 
 These are the top 5 drivers available from Pune. Would you like to see more drivers, or would you prefer to filter these results based on your preferences? I can help you filter by driver age, years of experience, language preferences, vehicle type, married/unmarried drivers, or pet-friendly options. Just let me know what's important to you!
+</example_hindi_interaction>
 
----
-
-Let me know if you want this converted into a JSON schema, YAML format, or code comments for chatbot integration.
+## SYSTEM CONSTRAINTS:
+- Operate exclusively within driver information and contact detail provision domain
+- Maintain data privacy standards
+- Ensure accurate function calling without deviation
+- Preserve conversational quality while maintaining efficiency
+- Always provide actionable next steps to guide the conversation
+- Primary goal is to provide driver contact information, not to book rides
 
 """
 
@@ -225,105 +284,152 @@ Let me know if you want this converted into a JSON schema, YAML format, or code 
         }
 
 
+def _create_driver_summary_for_llm(drivers: List[Dict[str, Any]]) -> str:
+    """
+    Creates a concise JSON summary of driver data to be passed to the LLM.
+    This helper function prevents overwhelming the model with too much raw data
+    and ensures all necessary fields are included for formatting.
+    """
+    if not isinstance(drivers, list):
+        return json.dumps(drivers, indent=2)
+
+    summary = {
+        "total_drivers_found": len(drivers),
+        "message": f"Successfully processed {len(drivers)} drivers.",
+        "drivers_summary": []
+    }
+
+    # Include a sample of up to 10 drivers with all key information
+    for driver in drivers[:10]:
+        # Safely extract the primary vehicle's information
+        vehicle = driver.get("vehicles", [{}])[0] if driver.get("vehicles") else {}
+
+        driver_summary = {
+            "id": driver.get("id"),
+            "name": driver.get("name"),
+            "phone": driver.get("phone"),
+            "city": driver.get("city"),
+            "username": driver.get("username"),
+            "profile_image": driver.get("profile_image"),
+            "age": driver.get("age"),
+            "experience": driver.get("experience", 0),
+            "languages": driver.get("languages", []),
+            "is_pet_allowed": driver.get("is_pet_allowed"),
+            "vehicle_model": vehicle.get("model", "N/A"),
+            "vehicle_type": vehicle.get("type", "N/A"),
+            "vehicle_image": vehicle.get("image_url"),
+            "price_per_km": vehicle.get("per_km_cost"),
+        }
+        summary["drivers_summary"].append(driver_summary)
+
+    return json.dumps(summary, indent=2)
+
+
 def tool_executor_node(state: dict) -> dict:
     """
-    Executes the tools requested by the agent and processes their outputs.
+    Executes tools requested by the agent, processes their outputs,
+    updates the state, and creates a concise summary for the next agent cycle.
     """
     print("---NODE: TOOL EXECUTOR---")
-    
-    if not state.get("tool_calls"):
+    tool_calls = state.get("tool_calls", [])
+    if not tool_calls:
         return {**state, "current_step": "no_tools_to_execute"}
-    
+
     tool_map = {tool.name: tool for tool in tools}
     tool_messages = []
     state_updates = dict(state)
-    
-    for tool_call in state["tool_calls"]:
-        tool_name = tool_call['name']
-        tool_args = tool_call['args']
-        tool_id = tool_call['id']
-        
+
+    for tool_call in tool_calls:
+        tool_name = tool_call.get('name')
+        tool_args = tool_call.get('args', {})
+        tool_id = tool_call.get('id')
+
         print(f"Executing tool: {tool_name} with args: {tool_args}")
-        
+        tool_to_call = tool_map.get(tool_name)
+
+        if not tool_to_call:
+            error_msg = f"Error: Tool '{tool_name}' not found."
+            tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id, name=tool_name))
+            continue
+
         try:
-            tool_to_call = tool_map.get(tool_name)
-            if not tool_to_call:
-                error_msg = f"Tool '{tool_name}' not found"
-                tool_messages.append(
-                    ToolMessage(content=error_msg, tool_call_id=tool_id, name=tool_name)
-                )
-                continue
-            
-            # Execute the tool
-            output = tool_to_call.invoke(tool_args)
-            
-            # Process tool outputs and update state
-            if tool_name == 'get_drivers_batch_simple':
-                state_updates['drivers_with_full_details'] = output
-                state_updates['filtered_drivers'] = output
-                state_updates['pickup_location'] = tool_args.get('city')
-                print(f"Fetched {len(output)} drivers with full details")
+            output = None
+            # Special handling for filter_drivers to ensure it uses the full list
+            if tool_name == 'filter_drivers':
+                full_driver_list = state_updates.get('drivers_with_full_details', [])
+                filter_criteria = tool_args.get('filters', {})
                 
-            elif tool_name == 'get_premium_drivers_by_city':
-                state_updates['premium_drivers'] = output
-                print(f"Fetched {len(output)} premium drivers")
-                
-            elif tool_name == 'filter_drivers_simple':
-                state_updates['filtered_drivers'] = output
-                state_updates['applied_filters'] = tool_args.get('filters', {})
-                print(f"Filtered to {len(output)} drivers")
-                
-            elif tool_name == 'get_driver_full_detail':
-                print(f"Got full details for driver")
-            
-            # Create a summary for the LLM (avoid sending too much data)
-            if isinstance(output, list) and len(output) > 0:
-                if tool_name in ['get_drivers_batch_simple', 'filter_drivers_simple']:
-                    # Create a concise summary for the LLM
-                    summary = {
-                        "total_drivers": len(output),
-                        "message": f"Found {len(output)} drivers successfully",
-                        "sample_drivers": []
-                    }
-                    
-                    # Include sample of up to 10 drivers with key info only
-                    for driver in output[:10]:
-                        driver_summary = {
-                            "id": driver.get("id"),
-                            "name": driver.get("name"),
-                            "age": driver.get("age"),
-                            "experience": driver.get("experience"),
-                            "languages": driver.get("languages", []),
-                            "vehicle": driver.get("vehicles", [{}])[0].get("model", "Unknown") if driver.get("vehicles") else "No vehicle",
-                            "vehicle_type": driver.get("vehicles", [{}])[0].get("vehicle_type", "Unknown") if driver.get("vehicles") else "Unknown",
-                            "is_married": driver.get("is_married"),
-                            "is_pet_allowed": driver.get("is_pet_allowed"),
-                            "connections": driver.get("connections", 0)
-                        }
-                        summary["sample_drivers"].append(driver_summary)
-                    
-                    output_str = json.dumps(summary, indent=2)
+                if not full_driver_list:
+                    output = "Error: No drivers have been fetched yet to apply filters on."
                 else:
-                    output_str = json.dumps(output[:5], indent=2)
+                    output = tool_to_call.invoke({
+                        "drivers": full_driver_list,
+                        "filters": filter_criteria
+                    })
             else:
-                output_str = json.dumps(output, indent=2) if output else "No data returned"
+                # Normal invocation for all other tools
+                output = tool_to_call.invoke(tool_args)
+
+            # Update the application's state based on the tool that was called
+            if tool_name == 'get_drivers_for_city':
+                newly_fetched_drivers = output
+                current_drivers = state_updates.get('drivers_with_full_details', [])
+                all_drivers = current_drivers + newly_fetched_drivers
+                state_updates['drivers_with_full_details'] = all_drivers
+                state_updates['filtered_drivers'] = all_drivers
+                current_page = state_updates.get('page_no', 1)
+                state_updates['page_no'] = current_page + 1
+                state_updates['pickup_location'] = tool_args.get('city')
+                print(f"Fetched {len(newly_fetched_drivers)} new drivers. Total drivers now: {len(all_drivers)}")
+
+            elif tool_name == 'filter_drivers':
+                existing_filters = state_updates.get('applied_filters', {})
+                new_filters = tool_args.get('filters', {})
+                updated_filters = {**existing_filters, **new_filters}
+                state_updates['filtered_drivers'] = output
+                state_updates['applied_filters'] = updated_filters
+                print(f"Filters applied: {updated_filters}. Found {len(output)} drivers.")
             
-            tool_messages.append(
-                ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name)
-            )
-            
+            # --- START: NEW LOGIC FOR REMOVING FILTERS ---
+            elif tool_name == 'remove_filters_from_search':
+                keys_to_remove = tool_args.get('keys_to_remove', [])
+                current_filters = state_updates.get('applied_filters', {})
+                
+                if "all" in keys_to_remove:
+                    state_updates['applied_filters'] = {}
+                    print("All filters have been removed.")
+                else:
+                    for key in keys_to_remove:
+                        if key in current_filters:
+                            del current_filters[key]
+                            print(f"Removed filter: {key}")
+                    state_updates['applied_filters'] = current_filters
+                
+                # After removing filters, reset the filtered list to the full list.
+                # The agent should then re-apply any remaining filters.
+                state_updates['filtered_drivers'] = state_updates.get('drivers_with_full_details', [])
+                # The 'output' for the LLM is the confirmation message from the tool itself.
+                print(f"Tool output: {output}")
+            # --- END: NEW LOGIC FOR REMOVING FILTERS ---
+
+            # Create a clean summary of the output for the LLM
+            if tool_name in ['get_drivers_for_city', 'filter_drivers']:
+                 output_str = _create_driver_summary_for_llm(output)
+            else:
+                 output_str = json.dumps(output, indent=2) if output else "No data returned."
+
+            tool_messages.append(ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name))
+
         except Exception as e:
-            error_msg = f"Error executing {tool_name}: {str(e)}"
+            error_msg = f"Error during execution of {tool_name}: {e}"
             print(error_msg)
-            tool_messages.append(
-                ToolMessage(content=error_msg, tool_call_id=tool_id, name=tool_name)
-            )
-    
-    # Update chat history and clear tool calls
+            tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id, name=tool_name))
+
+    # Update the chat history and clear the processed tool calls for the next cycle
     state_updates['chat_history'] = state.get("chat_history", []) + tool_messages
     state_updates['tool_calls'] = []
     state_updates['current_step'] = "tools_executed"
-    
+
     return state_updates
 
 

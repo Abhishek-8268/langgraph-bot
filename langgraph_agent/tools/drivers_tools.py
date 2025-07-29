@@ -6,6 +6,20 @@ from langchain_core.tools import tool
 # Import config
 import config
 
+from typing import List
+
+@tool
+def remove_filters_from_search(keys_to_remove: List[str]) -> str:
+    """
+    Removes one or more specified filters from the current search criteria.
+    Use this when the user wants to broaden their search again.
+    For example, to remove the language and age filters, the argument should be ["language", "age"].
+    To remove all filters, the argument should be ["all"].
+    """
+    # This tool doesn't need to do anything itself. Its purpose is to be called by the agent.
+    # The actual state modification will happen in the tool_executor_node.
+    return f"Will attempt to remove the following filters: {', '.join(keys_to_remove)}"
+
 @tool
 def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict]:
     """
@@ -200,6 +214,8 @@ def get_drivers_with_pagination(city: str, max_pages: int = 5, filters: Dict[str
     print(f"🎯 Final result: {len(all_drivers)} total, {len(filtered_drivers)} filtered from {pages_fetched} pages")
     return result
 
+# In drivers_tools.py
+
 def process_driver_data(premium_driver, details, driver_id):
     """Quickly process driver data without complex operations"""
     # Get profile image quickly
@@ -211,12 +227,29 @@ def process_driver_data(premium_driver, details, driver_id):
     # Process vehicles quickly
     vehicles = []
     for vehicle in premium_driver.get("verifiedVehicles", []):
+        # --- START: UPDATED IMAGE EXTRACTION LOGIC ---
+        image_url = None
+        # Safely access the nested image URL according to the schema structure
+        try:
+            # Check if the 'images' list exists and is not empty
+            if vehicle.get("images"):
+                # Get the first image object from the list
+                first_image_obj = vehicle["images"][0]
+                # Access the URL through the nested 'full' object
+                image_url = first_image_obj.get("full", {}).get("url")
+        except (IndexError, AttributeError, TypeError) as e:
+            # If any part of the structure is missing, log it and continue
+            print(f"Could not process vehicle image for driver {driver_id}: {e}")
+            image_url = None
+        # --- END: UPDATED IMAGE EXTRACTION LOGIC ---
+
         vehicle_info = {
             "model": vehicle.get("model", "Unknown"),
             "type": vehicle.get("vehicleType", "Unknown"),
             "reg_no": vehicle.get("reg_no", ""),
             "per_km_cost": float(vehicle.get("perKmCost", 0)) if vehicle.get("perKmCost") else 0.0,
-            "is_commercial": vehicle.get("is_commercial", False)
+            "is_commercial": vehicle.get("is_commercial", False),
+            "image_url": image_url # This now correctly holds the nested URL
         }
         vehicles.append(vehicle_info)
     
