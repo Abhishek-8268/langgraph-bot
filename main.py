@@ -14,6 +14,7 @@ slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 user_conversations = {}
 processed_messages = set()  # Track processed messages to avoid duplicates
 
+
 def get_user_state(user_id: str) -> dict:
     """Get or create user conversation state"""
     if user_id not in user_conversations:
@@ -24,9 +25,10 @@ def get_user_state(user_id: str) -> dict:
             "applied_filters": {},
             "pickup_location": None,
             "last_bot_response": None,
-            "tool_calls": []
+            "tool_calls": [],
         }
     return user_conversations[user_id]
+
 
 def is_duplicate_message(event: dict) -> bool:
     """Check if this event was already processed using multiple identifiers"""
@@ -39,7 +41,7 @@ def is_duplicate_message(event: dict) -> bool:
     identifiers = [
         f"{user_id}:{text}:{timestamp}",
         f"{user_id}:{timestamp}",
-        f"event:{event_ts}" if event_ts else None
+        f"event:{event_ts}" if event_ts else None,
     ]
 
     # Remove None values
@@ -63,6 +65,7 @@ def is_duplicate_message(event: dict) -> bool:
         processed_messages.update(new_set)
 
     return False
+
 
 def process_message(user_id: str, message: str) -> str:
     """Process user message through cab agent - OPTIMIZED"""
@@ -118,7 +121,7 @@ def process_message(user_id: str, message: str) -> str:
         if not response:
             chat_history = result.get("chat_history", [])
             for msg in reversed(chat_history):
-                if hasattr(msg, 'content') and 'AI' in str(type(msg)):
+                if hasattr(msg, "content") and "AI" in str(type(msg)):
                     if msg.content and msg.content.strip():
                         response = msg.content
                         print(f"📤 Got AI message: {response[:50]}...")
@@ -130,7 +133,9 @@ def process_message(user_id: str, message: str) -> str:
             filtered_drivers = result.get("filtered_drivers", [])
 
             if drivers or filtered_drivers:
-                response = f"I found {len(drivers or filtered_drivers)} drivers for you. Please let me know what specific information you'd like about them."
+                response = f"I found {
+                    len(drivers or filtered_drivers)
+                } drivers for you. Please let me know what specific information you'd like about them."
                 print(f"📤 Generated fallback response")
 
         # Final fallback
@@ -146,13 +151,16 @@ def process_message(user_id: str, message: str) -> str:
     except Exception as e:
         print(f"❌ Error processing message: {e}")
         import traceback
+
         traceback.print_exc()
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
+
 
 @slack_bot.post("/slack/events")
 async def handle_slack_events(request: Request):
     """Handle Slack events - FIXED for multi-user access"""
     data = await request.json()
+    """TESTING........"""
 
     # URL verification
     if "challenge" in data:
@@ -160,10 +168,11 @@ async def handle_slack_events(request: Request):
 
     # Handle messages
     event = data.get("event", {})
-    if (event.get("type") == "message" and
-        "bot_id" not in event and
-        "subtype" not in event):
-
+    if (
+        event.get("type") == "message"
+        and "bot_id" not in event
+        and "subtype" not in event
+    ):
         # Skip if duplicate event
         if is_duplicate_message(event):
             return {"status": "ok"}
@@ -177,19 +186,34 @@ async def handle_slack_events(request: Request):
         if not text:
             return {"status": "ok"}
 
-        print(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
+        print(
+            f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {
+                channel_type
+            })"
+        )
 
         # Send immediate acknowledgment for search queries
-        if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
+        if any(
+            keyword in text.lower()
+            for keyword in [
+                "driver",
+                "cab",
+                "jaipur",
+                "delhi",
+                "mumbai",
+                "find",
+                "book",
+            ]
+        ):
             try:
                 # Try to send acknowledgment
-               slack_client.chat_postMessage(
-               channel=channel,
-               text=f"🚗 {response}",
-               as_user=False,  # This is crucial!
-               username="Cab Bot"
-               )
-               print("📤 Sent immediate acknowledgment")
+                slack_client.chat_postMessage(
+                    channel=channel,
+                    text=f"🚗 {response}",
+                    as_user=False,  # This is crucial!
+                    username="Cab Bot",
+                )
+                print("📤 Sent immediate acknowledgment")
             except Exception as ack_error:
                 print(f"⚠️ Failed to send acknowledgment: {ack_error}")
                 # Don't fail the whole process if acknowledgment fails
@@ -206,10 +230,7 @@ async def handle_slack_events(request: Request):
 
         # Strategy 1: Try original channel
         try:
-            slack_client.chat_postMessage(
-                channel=channel,
-                text=f"🚗 {response}"
-            )
+            slack_client.chat_postMessage(channel=channel, text=f"🚗 {response}")
             print(f"✅ Sent response to channel {channel}")
             success = True
         except Exception as e:
@@ -224,7 +245,9 @@ async def handle_slack_events(request: Request):
                     dm_channel = dm_response["channel"]["id"]
                     slack_client.chat_postMessage(
                         channel=dm_channel,
-                        text=f"🚗 {response}\n\n_Note: I'm replying here because I don't have access to send messages in the other channel._"
+                        text=f"🚗 {
+                            response
+                        }\n\n_Note: I'm replying here because I don't have access to send messages in the other channel._",
                     )
                     print(f"✅ Sent as DM to {user_id} via opened conversation")
                     success = True
@@ -238,7 +261,9 @@ async def handle_slack_events(request: Request):
             try:
                 slack_client.chat_postMessage(
                     channel=user_id,
-                    text=f"🚗 {response}\n\n_Note: Having trouble with channel permissions. You might need to add me to the channel or your admin needs to update my permissions._"
+                    text=f"🚗 {
+                        response
+                    }\n\n_Note: Having trouble with channel permissions. You might need to add me to the channel or your admin needs to update my permissions._",
                 )
                 print(f"✅ Sent as direct DM to {user_id}")
                 success = True
@@ -253,6 +278,7 @@ async def handle_slack_events(request: Request):
 
     return {"status": "ok"}
 
+
 @slack_bot.post("/slack/commands")
 async def handle_slash_commands(request: Request):
     """Handle /cab slash command"""
@@ -261,11 +287,14 @@ async def handle_slash_commands(request: Request):
     text = form_data.get("text", "").strip()
 
     if not text:
-        response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
+        response = (
+            "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
+        )
     else:
         response = process_message(user_id, text)
 
     return {"text": f"🚗 {response}"}
+
 
 @slack_bot.get("/test_agent/{message}")
 async def test_agent_directly(message: str):
@@ -282,10 +311,11 @@ async def test_agent_directly(message: str):
             "state_keys": list(state.keys()),
             "chat_history_length": len(state.get("chat_history", [])),
             "drivers_count": len(state.get("drivers_with_full_details", [])),
-            "last_bot_response": state.get("last_bot_response", "")[:100] + "..."
+            "last_bot_response": state.get("last_bot_response", "")[:100] + "...",
         }
     except Exception as e:
         return {"error": str(e)}
+
 
 @slack_bot.get("/debug/{user_id}")
 async def debug_user(user_id: str):
@@ -298,9 +328,10 @@ async def debug_user(user_id: str):
             "drivers": len(state.get("drivers_with_full_details", [])),
             "pickup": state.get("pickup_location"),
             "last_response": state.get("last_bot_response", "")[:200] + "...",
-            "processed_messages_count": len(processed_messages)
+            "processed_messages_count": len(processed_messages),
         }
     return {"error": "User not found"}
+
 
 @slack_bot.get("/clear_cache")
 async def clear_cache():
@@ -309,6 +340,7 @@ async def clear_cache():
     processed_messages.clear()
     user_conversations.clear()
     return {"status": "Cache cleared"}
+
 
 @slack_bot.get("/")
 async def home():
@@ -323,14 +355,16 @@ async def home():
             "commands": "/slack/commands",
             "debug": "/debug/{user_id}",
             "clear_cache": "/clear_cache",
-            "health": "/health"
-        }
+            "health": "/health",
+        },
     }
+
 
 @slack_bot.get("/health")
 async def health():
     """Health check"""
     return {"status": "healthy"}
+
 
 if __name__ == "__main__":
     import uvicorn
