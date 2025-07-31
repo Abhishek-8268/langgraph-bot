@@ -3,8 +3,8 @@ from typing import List
 
 from langgraph_agent.tools.drivers_tools import (
     filter_drivers, 
-    get_driver_full_detail, 
-    get_premium_drivers_by_city,
+    # get_driver_full_detail, 
+    # get_premium_drivers_by_city,
     get_drivers_with_details_batch
 )
 from schemas.driver_schema import CabBookingState, Driver, PremiumDriver

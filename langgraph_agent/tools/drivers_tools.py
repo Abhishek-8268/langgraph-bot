@@ -64,6 +64,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
             print(f"📄 No drivers found on page {page}")
             return []
         
+        
         # Step 2: Get detailed info for ALL drivers in parallel - OPTIMIZED
         drivers_with_details = []
         
@@ -465,48 +466,3 @@ def get_driver_details(driver_id: str) -> Optional[Dict]:
         return None
 
 
-# Test function
-def test_working_tools():
-    """Test the working tools with real API calls"""
-    print("🧪 Testing working tools...")
-    
-    try:
-        # Test 1: Get drivers
-        print("\n1️⃣ Testing get_drivers_for_city...")
-        drivers = get_drivers_for_city.invoke({"city": "jaipur", "page": 1, "limit": 3})
-        print(f"Got {len(drivers)} drivers")
-        
-        if drivers:
-            print(f"Sample driver: {drivers[0]['name']} - {drivers[0]['age']} years old")
-            print(f"Languages: {drivers[0]['languages']}")
-            print(f"Vehicle: {drivers[0]['vehicles'][0]['model'] if drivers[0]['vehicles'] else 'No vehicle'}")
-            
-            # Test 2: Filter drivers
-            print("\n2️⃣ Testing filter_drivers...")
-            test_filters = {"language": "Hindi", "experience": {"operator": ">=", "value": 5}}
-            filtered = filter_drivers.invoke({"drivers": drivers, "filters": test_filters})
-            print(f"Filtered from {len(drivers)} to {len(filtered)} drivers")
-            
-            # Test 3: Get driver details
-            if drivers:
-                print("\n3️⃣ Testing get_driver_details...")
-                first_driver_id = drivers[0]["id"]
-                details = get_driver_details.invoke({"driver_id": first_driver_id})
-                if details:
-                    print(f"Got detailed info for: {details['name']}")
-                    print(f"Bio: {details['bio'][:100]}...")
-                else:
-                    print("❌ Failed to get driver details")
-        else:
-            print("❌ No drivers returned")
-            
-    except Exception as e:
-        print(f"❌ Error in test: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\n✅ Tool testing complete!")
-
-
-if __name__ == "__main__":
-    test_working_tools()
