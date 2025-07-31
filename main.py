@@ -344,6 +344,6 @@ if __name__ == "__main__":
     print("🚀 Starting Cab Booking Slack Bot")
     print("🔗 Slack Events URL: https://your-ngrok-url.ngrok.io/slack/events")
 
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT"))
     print(f"📍 Server: http://localhost:{port}")
     uvicorn.run(slack_bot, host="0.0.0.0", port=port)

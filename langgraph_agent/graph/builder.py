@@ -24,7 +24,8 @@ tools = [
 ]
 
 
-llm = ChatVertexAI(model="gemini-2.0-flash-exp", temperature=0.5)
+# Using a newer, recommended model for better performance
+llm = ChatVertexAI(model="gemini-2.5-flash", temperature=0.1)
 llm_with_tools = llm.bind_tools(tools)
 
 def agent_node(state: dict) -> dict:
@@ -78,7 +79,7 @@ def agent_node(state: dict) -> dict:
             "current_step": "agent_error"
         }
 
-
+# --- START: MODIFIED FUNCTION ---
 def _create_driver_summary_for_llm(drivers: List[Dict[str, Any]]) -> str:
     """
     Creates a concise JSON summary of driver data to be passed to the LLM.
@@ -86,7 +87,16 @@ def _create_driver_summary_for_llm(drivers: List[Dict[str, Any]]) -> str:
     and ensures all necessary fields are included for formatting.
     """
     if not isinstance(drivers, list):
+        # If the tool returns a message (e.g., an error or confirmation), pass it directly.
+        if isinstance(drivers, str):
+            return drivers
         return json.dumps(drivers, indent=2)
+
+    if not drivers:
+        return json.dumps({
+            "total_drivers_found": 0,
+            "message": "No drivers found matching the criteria."
+        }, indent=2)
 
     summary = {
         "total_drivers_found": len(drivers),
@@ -118,8 +128,10 @@ def _create_driver_summary_for_llm(drivers: List[Dict[str, Any]]) -> str:
         summary["drivers_summary"].append(driver_summary)
 
     return json.dumps(summary, indent=2)
+# --- END: MODIFIED FUNCTION ---
 
 
+# --- START: MODIFIED FUNCTION ---
 def tool_executor_node(state: dict) -> dict:
     """
     Executes tools requested by the agent, processes their outputs,
@@ -149,69 +161,71 @@ def tool_executor_node(state: dict) -> dict:
 
         try:
             output = None
-            # Special handling for filter_drivers to ensure it uses the full list
-            if tool_name == 'filter_drivers':
-                full_driver_list = state_updates.get('drivers_with_full_details', [])
-                filter_criteria = tool_args.get('filters', {})
-                
-                if not full_driver_list:
-                    output = "Error: No drivers have been fetched yet to apply filters on."
-                else:
-                    output = tool_to_call.invoke({
-                        "drivers": full_driver_list,
-                        "filters": filter_criteria
-                    })
-            else:
-                # Normal invocation for all other tools
-                output = tool_to_call.invoke(tool_args)
+            
+            # Get the full list of drivers from the current state for filtering operations
+            full_driver_list = state_updates.get('drivers_with_full_details', [])
 
-            # Update the application's state based on the tool that was called
             if tool_name == 'get_drivers_for_city':
-                newly_fetched_drivers = output
-                current_drivers = state_updates.get('drivers_with_full_details', [])
-                all_drivers = current_drivers + newly_fetched_drivers
-                state_updates['drivers_with_full_details'] = all_drivers
-                state_updates['filtered_drivers'] = all_drivers
-                current_page = state_updates.get('page_no', 1)
-                state_updates['page_no'] = current_page + 1
+                output = tool_to_call.invoke(tool_args)
+                state_updates['drivers_with_full_details'] = output
+                state_updates['filtered_drivers'] = output
+                state_updates['applied_filters'] = {} # Reset filters on new city search
                 state_updates['pickup_location'] = tool_args.get('city')
-                print(f"Fetched {len(newly_fetched_drivers)} new drivers. Total drivers now: {len(all_drivers)}")
+                print(f"Fetched {len(output)} drivers. Filters reset.")
 
             elif tool_name == 'filter_drivers':
-                existing_filters = state_updates.get('applied_filters', {})
-                new_filters = tool_args.get('filters', {})
-                updated_filters = {**existing_filters, **new_filters}
-                state_updates['filtered_drivers'] = output
-                state_updates['applied_filters'] = updated_filters
-                print(f"Filters applied: {updated_filters}. Found {len(output)} drivers.")
-            
-            # --- START: NEW LOGIC FOR REMOVING FILTERS ---
+                if not full_driver_list:
+                    output = "Error: No drivers have been fetched yet. Please search for a city first."
+                else:
+                    new_filters = tool_args.get('filters', {})
+                    # Combine with existing filters for a comprehensive search
+                    combined_filters = {**state_updates.get('applied_filters', {}), **new_filters}
+                    output = tool_to_call.invoke({
+                        "drivers": full_driver_list,
+                        "filters": combined_filters
+                    })
+                    state_updates['filtered_drivers'] = output
+                    state_updates['applied_filters'] = combined_filters
+                    print(f"Filters applied: {combined_filters}. Found {len(output)} drivers.")
+
             elif tool_name == 'remove_filters_from_search':
                 keys_to_remove = tool_args.get('keys_to_remove', [])
-                current_filters = state_updates.get('applied_filters', {})
+                current_filters = state_updates.get('applied_filters', {}).copy()
                 
                 if "all" in keys_to_remove:
-                    state_updates['applied_filters'] = {}
-                    print("All filters have been removed.")
+                    current_filters.clear()
+                    print("All filters removed.")
                 else:
                     for key in keys_to_remove:
                         if key in current_filters:
                             del current_filters[key]
                             print(f"Removed filter: {key}")
-                    state_updates['applied_filters'] = current_filters
                 
-                # After removing filters, reset the filtered list to the full list.
-                # The agent should then re-apply any remaining filters.
-                state_updates['filtered_drivers'] = state_updates.get('drivers_with_full_details', [])
-                # The 'output' for the LLM is the confirmation message from the tool itself.
-                print(f"Tool output: {output}")
-            # --- END: NEW LOGIC FOR REMOVING FILTERS ---
+                state_updates['applied_filters'] = current_filters
+                
+                # Atomically re-apply remaining filters
+                if current_filters:
+                    output = filter_drivers.invoke({
+                        "drivers": full_driver_list,
+                        "filters": current_filters
+                    })
+                    print(f"Re-filtered list. Found {len(output)} drivers.")
+                else:
+                    # If no filters left, return the full list
+                    output = full_driver_list
+                    print("No filters left. Returning full driver list.")
+                
+                state_updates['filtered_drivers'] = output
+
+            else:
+                # Normal invocation for other tools like get_driver_details
+                output = tool_to_call.invoke(tool_args)
 
             # Create a clean summary of the output for the LLM
-            if tool_name in ['get_drivers_for_city', 'filter_drivers']:
-                 output_str = _create_driver_summary_for_llm(output)
+            if tool_name in ['get_drivers_for_city', 'filter_drivers', 'remove_filters_from_search']:
+                output_str = _create_driver_summary_for_llm(output)
             else:
-                 output_str = json.dumps(output, indent=2) if output else "No data returned."
+                output_str = json.dumps(output, indent=2) if isinstance(output, (dict, list)) else str(output)
 
             tool_messages.append(ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name))
 
@@ -226,6 +240,7 @@ def tool_executor_node(state: dict) -> dict:
     state_updates['current_step'] = "tools_executed"
 
     return state_updates
+# --- END: MODIFIED FUNCTION ---
 
 
 def route_after_agent(state: dict) -> str:
