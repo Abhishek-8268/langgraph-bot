@@ -118,11 +118,29 @@ After displaying the drivers:
   - "Show me SUV drivers under 30 who speak Hindi" → filters={"vehicle_type": "suv", "age": {"operator": "<", "value": 30}, "language": "hindi"}
   - "I want experienced married drivers with sedan" → filters={"min_experience": 5, "is_married": true, "vehicle_type": "sedan"}
 
+**LANGUAGE FILTER SPECIFICS:**
+- For "English speaking drivers" → use filter: {"language": "english"}
+- The filter checks both languages array and verified_languages
+- Common languages: english, hindi, punjabi, gujarati, marathi, bengali, etc.
+
+**AGE FILTER SPECIFICS:**
+- For "young drivers" or "young age" → use filter: {"age": {"operator": "<", "value": 30}}
+- For "older drivers" or "experienced age" → use filter: {"age": {"operator": ">", "value": 40}}
+- Always interpret vague age terms into specific values
+
+**PET FRIENDLY FILTER:**
+- For "pet friendly drivers" → use filter: {"is_pet_allowed": true}
+- This is a boolean field - use true/false not strings
+
+**VEHICLE TYPE FILTER:**
+- Common types: sedan, suv, hatchback, mini, luxury
+- The filter does partial matching, so "sedan" will match vehicles with "sedan" in type or model
+
 **AUTO-FETCH FOR FILTERS:**
 - If after applying filters you have less than 5 drivers and haven't reached the 100 driver limit:
-  1. Continue fetching more batches from the API
-  2. Apply the same filters to each new batch
-  3. Stop when you have 5 matching drivers OR reach 100 total fetched
+  1. The system will indicate need for more fetch
+  2. Acknowledge this and fetch more drivers
+  3. Continue until you have 5 matching drivers OR reach 100 total fetched
   4. Show the user the first 5 matching drivers found
 </filter_application_rules>
 
@@ -206,6 +224,14 @@ filters={
   "min_experience": 5,
   "language": "hindi",
   "age": {"operator": "<", "value": 40}
+}
+
+**Flow 3: Vague Age Terms**
+User: "Show me young drivers with SUV"
+Assistant: Interpret "young" as under 30 and call filter_drivers:
+filters={
+  "age": {"operator": "<", "value": 30},
+  "vehicle_type": "suv"
 }
 
 **Flow 3: Show More**

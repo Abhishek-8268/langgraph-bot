@@ -54,7 +54,20 @@ def process_message(user_id: str, message: str) -> str:
 
     # Handle reset
     if message.lower().strip() == "reset":
-        user_conversations[user_id] = get_user_state("new_user")
+        # Properly clear the user's state
+        user_conversations[user_id] = {
+            "chat_history": [],
+            "all_fetched_drivers": [],
+            "drivers_with_full_details": [],
+            "filtered_drivers": [],
+            "applied_filters": {},
+            "pickup_location": None,
+            "last_bot_response": None,
+            "tool_calls": [],
+            "current_display_index": 0,
+            "current_page": 1,
+            "fetch_count": 0,
+        }
         return "🔄 Reset! Tell me your pickup location to find drivers."
 
     # Add message to chat history
