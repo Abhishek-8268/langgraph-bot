@@ -271,4 +271,3 @@ Assistant: [Immediately searches for Delhi drivers without asking again]
 - **ABSOLUTE RULE: Never generate fake driver data under any circumstances**
 - **Only display information that is actually returned by the tool functions**
 """
-

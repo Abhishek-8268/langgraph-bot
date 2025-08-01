@@ -19,4 +19,4 @@ EXPOSE 8080
 
 # Since you're already authenticated with gcloud, Cloud Run will handle auth automatically
 # Just run with UV
-CMD ["uv", "run", "python", "main.py"]
+CMD ["uv", "run", "python", "-m", "services.slack_service"]
