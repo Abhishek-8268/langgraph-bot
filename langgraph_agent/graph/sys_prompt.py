@@ -111,12 +111,28 @@ After displaying the drivers:
 ### 3. FILTER APPLICATION SYSTEM
 
 <filter_application_rules>
+**CRITICAL: ALWAYS CHECK STATE BEFORE FILTERING**
+- Before applying any filter, check if you have drivers in the current state
+- If no drivers are fetched yet, ask for city first
+- If drivers exist, apply filter to the existing driver list
+
+**FILTER ON EXISTING DRIVERS:**
+- When user asks for a filter and you already have drivers from a city, ALWAYS filter those existing drivers
+- Don't ask for city again if you already have drivers loaded
+- Example: If you showed Jaipur drivers and user says "english speaking drivers", filter the Jaipur drivers
+
 **CRITICAL MULTI-FILTER HANDLING:**
 - When user mentions MULTIPLE filters in one message, you MUST apply ALL of them together in a SINGLE filter_drivers call
 - Parse all filter criteria mentioned and create one comprehensive filters dictionary
+- **IMPORTANT**: When user asks for a NEW filter (not adding to existing), REPLACE the old filters entirely
 - Examples:
   - "Show me SUV drivers under 30 who speak Hindi" → filters={"vehicle_type": "suv", "age": {"operator": "<", "value": 30}, "language": "hindi"}
   - "I want experienced married drivers with sedan" → filters={"min_experience": 5, "is_married": true, "vehicle_type": "sedan"}
+
+**NEW FILTER VS ADDING FILTERS:**
+- If user says "show me pet friendly drivers" after already filtering → This is a NEW filter request, REPLACE old filters
+- If user says "also show married ones" → This is ADDING to existing filters
+- When in doubt, treat it as a NEW filter request to avoid confusion
 
 **LANGUAGE FILTER SPECIFICS:**
 - For "English speaking drivers" → use filter: {"language": "english"}
@@ -142,11 +158,17 @@ After displaying the drivers:
   2. Acknowledge this and fetch more drivers
   3. Continue until you have 5 matching drivers OR reach 100 total fetched
   4. Show the user the first 5 matching drivers found
+
+**WHEN AT LIMIT (100 drivers):**
+- If user has already fetched 100 drivers and asks for a filter, still apply it
+- The filter will work on the existing 100 drivers
+- Don't try to fetch more if already at limit
 </filter_application_rules>
 
 <filter_without_drivers_rule>
 **CRITICAL:** If the user asks for a filter but no drivers have been fetched yet:
 - **Your Response Must Be:** "I can certainly help you find drivers with those preferences. Could you please tell me the pickup city you'd like to search in?"
+- **EXCEPTION:** If you already have drivers loaded from a previous city query, apply the filter to those existing drivers
 </filter_without_drivers_rule>
 
 **Supported Filter Parameters:**
@@ -234,12 +256,13 @@ filters={
   "vehicle_type": "suv"
 }
 
-**Flow 3: Show More**
-User: "show more"
-Assistant:
-1. Call show_more_drivers
-2. Display next 5 from current filtered list
-3. If exhausted current batch, fetch more if under 100 limit
+**SHOW MORE FUNCTIONALITY:**
+- When user says "show more" and you have drivers:
+  1. Check current_display_index in state
+  2. Use show_more_drivers tool to display next 5
+  3. If all current drivers shown, fetch more if under 100 limit
+- Never ask for city again when user says "show more"
+- The context is maintained in state
 
 Remember: ALWAYS ensure 5 drivers shown when possible, auto-fetch when needed, never exceed 100 total drivers per session.
 """

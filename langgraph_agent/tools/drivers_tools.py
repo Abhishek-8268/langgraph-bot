@@ -91,8 +91,10 @@ def process_driver_data(premium_driver: Dict, details: Dict, driver_id: str) -> 
     # Get profile image
     profile_image = None
     photos = premium_driver.get("photos", [])
-    if photos and photos[0].get("full", {}).get("url"):
-        profile_image = photos[0]["full"]["url"]
+    if photos and isinstance(photos, list) and len(photos) > 0:
+        photo = photos[0]
+        if isinstance(photo, dict) and "full" in photo:
+            profile_image = photo["full"].get("url")
 
     # Process vehicles
     vehicles = []
@@ -102,7 +104,8 @@ def process_driver_data(premium_driver: Dict, details: Dict, driver_id: str) -> 
         if vehicle.get("images"):
             try:
                 first_image = vehicle["images"][0]
-                image_url = first_image.get("full", {}).get("url")
+                if isinstance(first_image, dict) and "full" in first_image:
+                    image_url = first_image["full"].get("url")
             except:
                 pass
 

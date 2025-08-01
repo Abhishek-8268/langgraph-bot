@@ -31,7 +31,7 @@ tools = [
 ]
 
 # Initialize LLM
-llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.1)
+llm = ChatVertexAI(model="gemini-2.0-flash-exp", temperature=0.1)
 llm_with_tools = llm.bind_tools(tools)
 
 
@@ -148,16 +148,22 @@ def tool_executor_node(state: dict) -> dict:
 
                 # Apply filters
                 new_filters = tool_args.get("filters", {})
-                combined_filters = {
-                    **state_updates.get("applied_filters", {}),
-                    **new_filters,
-                }
+
+                # IMPORTANT: For new filter requests, replace old filters
+                # This prevents the issue where it can't find drivers when applying new filters
+                if new_filters:
+                    combined_filters = new_filters
+                else:
+                    combined_filters = {
+                        **state_updates.get("applied_filters", {}),
+                        **new_filters,
+                    }
 
                 # Log for debugging
                 logger.info(
-                    f"Filtering {
-                        len(drivers_to_filter)
-                    } drivers with combined filters: {combined_filters}"
+                    f"Filtering {len(drivers_to_filter)} drivers with filters: {
+                        combined_filters
+                    }"
                 )
 
                 # Call filter with all drivers
@@ -169,28 +175,29 @@ def tool_executor_node(state: dict) -> dict:
                     {"drivers": drivers_to_filter, "filters": combined_filters}
                 )
 
+                # Check if we've reached max fetch limit
+                fetch_count = state_updates.get("fetch_count", 0)
+                total_drivers = len(drivers_to_filter)
+
                 # If we don't have enough matching drivers and haven't reached limit
-                if len(filtered_result) < config.DRIVERS_PER_DISPLAY:
-                    fetch_count = state_updates.get("fetch_count", 0)
+                if (
+                    len(filtered_result) < config.DRIVERS_PER_DISPLAY
+                    and fetch_count < config.MAX_FETCH_DEPTH
+                ):
                     current_page = state_updates.get("current_page", 1)
 
-                    if fetch_count < config.MAX_FETCH_DEPTH:
-                        # Store current filtered results
-                        state_updates["filtered_drivers"] = filtered_result
-                        state_updates["applied_filters"] = combined_filters
-                        state_updates["need_more_fetch"] = True
-                        state_updates["need_more_for_filter"] = True
+                    # Store current filtered results
+                    state_updates["filtered_drivers"] = filtered_result
+                    state_updates["applied_filters"] = combined_filters
+                    state_updates["need_more_fetch"] = True
+                    state_updates["need_more_for_filter"] = True
 
-                        output = {
-                            "current_matches": len(filtered_result),
-                            "need_more_fetch": True,
-                            "next_page": current_page + 1,
-                        }
-                    else:
-                        state_updates["filtered_drivers"] = filtered_result
-                        state_updates["applied_filters"] = combined_filters
-                        state_updates["current_display_index"] = 0
-                        output = filtered_result
+                    output = {
+                        "current_matches": len(filtered_result),
+                        "need_more_fetch": True,
+                        "next_page": current_page + 1,
+                        "total_checked": total_drivers,
+                    }
                 else:
                     state_updates["filtered_drivers"] = filtered_result
                     state_updates["applied_filters"] = combined_filters
