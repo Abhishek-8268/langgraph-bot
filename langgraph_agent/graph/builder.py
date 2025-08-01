@@ -4,17 +4,15 @@ from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
 from langchain_google_vertexai import ChatVertexAI
 from typing import List, Dict, Any
 
-# Import the new prompt and the updated set of tools
 from langgraph_agent.graph.sys_prompt import bot_prompt
 from langgraph_agent.tools.drivers_tools import (
     get_drivers_for_city,
     filter_drivers,
     get_driver_details,
     remove_filters_from_search,
-    show_more_drivers  # Import the new tool
+    show_more_drivers
 )
 
-# The list of tools now includes the new show_more_drivers tool
 tools = [
     get_drivers_for_city,
     filter_drivers,
@@ -23,8 +21,7 @@ tools = [
     show_more_drivers
 ]
 
-# Using a newer, recommended model for better performance
-llm = ChatVertexAI(model="gemini-2.5-flash", temperature=0.1)
+llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.1)
 llm_with_tools = llm.bind_tools(tools)
 
 def agent_node(state: dict) -> dict:
@@ -41,12 +38,13 @@ def agent_node(state: dict) -> dict:
             return {**state, "chat_history": updated_history, "tool_calls": ai_response.tool_calls}
             
     except Exception:
-        # Silently fail to the default error message for production
         return {**state, "last_bot_response": "I apologize, but I encountered an issue. Please try again."}
 
 def _create_driver_summary_for_llm(state: dict) -> str:
-    """Creates a concise JSON summary of the current display state for the LLM."""
-    
+    """
+    Creates a concise, flattened JSON summary of the current display state for the LLM,
+    including the search depth to guide re-fetching decisions.
+    """
     drivers_to_paginate = state.get('filtered_drivers', state.get('drivers_with_full_details', []))
     offset = state.get('display_offset', 0)
     drivers_to_display = drivers_to_paginate[offset:offset+5]
@@ -57,6 +55,8 @@ def _create_driver_summary_for_llm(state: dict) -> str:
         "drivers_in_current_view": len(drivers_to_display),
         "more_drivers_in_list": len(drivers_to_paginate) > offset + 5,
         "no_more_drivers_from_api": state.get("no_more_drivers_from_api", False),
+        "filter_search_depth": state.get("filter_search_depth", 0),
+        "unfiltered_search_depth": state.get("unfiltered_search_depth", 0),
         "drivers_summary": []
     }
 
@@ -65,17 +65,16 @@ def _create_driver_summary_for_llm(state: dict) -> str:
         summary["drivers_summary"].append({
             "id": driver.get("id"),
             "name": driver.get("name"),
-            "age": driver.get("age"),
-            "experience": driver.get("experience", 0),
-            "languages": driver.get("languages", []),
-            "vehicle_model": vehicle.get("model", "N/A"),
-            "vehicle_type": vehicle.get("type", "N/A"),
+            "city": driver.get("city"),
+            "userName": driver.get("username"),
+            "car_model": vehicle.get("model", "Not available"),
+            "price_per_km": vehicle.get("per_km_cost")
         })
 
     return json.dumps(summary, indent=2)
 
 def tool_executor_node(state: dict) -> dict:
-    """Executes tools, manages state, and implements the re-fetching and pagination logic."""
+    """Executes tools and manages state, including the filter and unfiltered search depth."""
     tool_calls = state.get("tool_calls", [])
     if not tool_calls:
         return state
@@ -96,9 +95,14 @@ def tool_executor_node(state: dict) -> dict:
 
         try:
             if tool_name == 'get_drivers_for_city':
-                tool_args['limit'] = 50
+                tool_args['limit'] = 25
                 newly_fetched = tool_to_call.invoke(tool_args)
                 
+                if state_updates.get('applied_filters'):
+                    state_updates['filter_search_depth'] = state_updates.get('filter_search_depth', 0) + 1
+                else:
+                    state_updates['unfiltered_search_depth'] = state_updates.get('unfiltered_search_depth', 0) + 1
+
                 if not newly_fetched:
                     state_updates['no_more_drivers_from_api'] = True
                 else:
@@ -121,6 +125,7 @@ def tool_executor_node(state: dict) -> dict:
                 state_updates['filtered_drivers'] = filtered_output
                 state_updates['applied_filters'] = combined_filters
                 state_updates['display_offset'] = 0
+                state_updates['filter_search_depth'] = 1
 
             elif tool_name == 'show_more_drivers':
                 state_updates['display_offset'] = state_updates.get('display_offset', 0) + 5
@@ -138,6 +143,7 @@ def tool_executor_node(state: dict) -> dict:
                 all_drivers = state_updates.get('drivers_with_full_details', [])
                 state_updates['filtered_drivers'] = filter_drivers.invoke({"drivers": all_drivers, "filters": current_filters}) if current_filters else all_drivers
                 state_updates['display_offset'] = 0
+                state_updates['filter_search_depth'] = 0
 
             else: # Handles get_driver_details
                 output = tool_to_call.invoke(tool_args)
@@ -148,7 +154,6 @@ def tool_executor_node(state: dict) -> dict:
             tool_messages.append(ToolMessage(content=summary_for_llm, tool_call_id=tool_id))
 
         except Exception as e:
-            # In production, it's better to provide a generic error than to expose internal details
             tool_messages.append(ToolMessage(content="An error occurred while processing your request.", tool_call_id=tool_id))
 
     state_updates['chat_history'] = state.get("chat_history", []) + tool_messages
@@ -156,7 +161,7 @@ def tool_executor_node(state: dict) -> dict:
     return state_updates
 
 def route_after_agent(state: dict) -> str:
-    """Decides the next step after the agent node. If tools were called, it executes them. Otherwise, it ends."""
+    """Decides the next step after the agent node."""
     if state.get("tool_calls"):
         return "action"
     return END
@@ -171,5 +176,4 @@ def create_cab_booking_graph():
     workflow.add_edge("action", "agent")
     return workflow.compile()
 
-# This compiled app is imported by main.py
 app = create_cab_booking_graph()
