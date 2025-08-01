@@ -194,14 +194,33 @@ def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
             elif filter_key == "language" and isinstance(filter_value, str):
                 target_lang = filter_value.lower()
                 languages = driver.get("languages", [])
-                if not any(lang.lower() == target_lang for lang in languages):
+                # Check both languages array and verified_languages
+                has_language = any(lang.lower() == target_lang for lang in languages)
+
+                if not has_language:
+                    verified_langs = driver.get("verified_languages", [])
+                    has_language = any(
+                        vl.get("name", "").lower() == target_lang
+                        for vl in verified_langs
+                        if isinstance(vl, dict)
+                    )
+
+                if not has_language:
                     passes_all_filters = False
                     break
 
             elif filter_key == "vehicle_type" and isinstance(filter_value, str):
                 target_type = filter_value.lower()
                 vehicles = driver.get("vehicles", [])
-                if not any(v.get("type", "").lower() == target_type for v in vehicles):
+                # Check for partial matches and common variations
+                if not any(
+                    target_type in v.get("type", "").lower()
+                    or v.get("type", "").lower() in target_type
+                    or (
+                        target_type == "sedan" and "sedan" in v.get("model", "").lower()
+                    )
+                    for v in vehicles
+                ):
                     passes_all_filters = False
                     break
 

@@ -153,6 +153,13 @@ def tool_executor_node(state: dict) -> dict:
                     **new_filters,
                 }
 
+                # Log for debugging
+                logger.info(
+                    f"Filtering {
+                        len(drivers_to_filter)
+                    } drivers with combined filters: {combined_filters}"
+                )
+
                 # Call filter with all drivers
                 from langgraph_agent.tools.drivers_tools import (
                     filter_drivers as filter_func,
@@ -162,10 +169,33 @@ def tool_executor_node(state: dict) -> dict:
                     {"drivers": drivers_to_filter, "filters": combined_filters}
                 )
 
-                state_updates["filtered_drivers"] = filtered_result
-                state_updates["applied_filters"] = combined_filters
-                state_updates["current_display_index"] = 0
-                output = filtered_result
+                # If we don't have enough matching drivers and haven't reached limit
+                if len(filtered_result) < config.DRIVERS_PER_DISPLAY:
+                    fetch_count = state_updates.get("fetch_count", 0)
+                    current_page = state_updates.get("current_page", 1)
+
+                    if fetch_count < config.MAX_FETCH_DEPTH:
+                        # Store current filtered results
+                        state_updates["filtered_drivers"] = filtered_result
+                        state_updates["applied_filters"] = combined_filters
+                        state_updates["need_more_fetch"] = True
+                        state_updates["need_more_for_filter"] = True
+
+                        output = {
+                            "current_matches": len(filtered_result),
+                            "need_more_fetch": True,
+                            "next_page": current_page + 1,
+                        }
+                    else:
+                        state_updates["filtered_drivers"] = filtered_result
+                        state_updates["applied_filters"] = combined_filters
+                        state_updates["current_display_index"] = 0
+                        output = filtered_result
+                else:
+                    state_updates["filtered_drivers"] = filtered_result
+                    state_updates["applied_filters"] = combined_filters
+                    state_updates["current_display_index"] = 0
+                    output = filtered_result
 
                 logger.info(
                     f"Applied filters: {combined_filters}, found {
@@ -263,14 +293,28 @@ def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
     elif tool_name == "filter_drivers":
         # Show first 5 of filtered results
         filtered = output if isinstance(output, list) else []
+
+        # Check if we need more fetch
+        if isinstance(output, dict) and output.get("need_more_fetch"):
+            return json.dumps(
+                {
+                    "current_matching_drivers": output.get("current_matches", 0),
+                    "message": "Found some matching drivers but fetching more to show you the best options.",
+                    "need_more_fetch": True,
+                    "next_page": output.get("next_page"),
+                }
+            )
+
         drivers_to_show = filtered[: config.DRIVERS_PER_DISPLAY]
 
         if not drivers_to_show:
+            all_drivers_count = len(state.get("all_fetched_drivers", []))
             return json.dumps(
                 {
+                    "total_drivers_checked": all_drivers_count,
                     "total_matching_drivers": 0,
-                    "message": "No drivers found matching the criteria.",
-                    "need_more_fetch": True,
+                    "message": f"I've searched through {all_drivers_count} drivers but couldn't find any matching your criteria.",
+                    "suggestion": "Would you like to adjust your filters or try a different city?",
                 }
             )
 
