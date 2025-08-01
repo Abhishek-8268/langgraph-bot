@@ -75,9 +75,15 @@ class CabBookingState(BaseModel):
     # Chat history
     chat_history: List[BaseMessage] = Field(default_factory=list)
 
-    # Driver data
+    # Driver data - now storing all fetched drivers
+    all_fetched_drivers: List[Dict[str, Any]] = Field(default_factory=list)
     drivers_with_full_details: List[Dict[str, Any]] = Field(default_factory=list)
     filtered_drivers: List[Dict[str, Any]] = Field(default_factory=list)
+
+    # Pagination state
+    current_display_index: int = 0
+    current_page: int = 1
+    fetch_count: int = 0
 
     # Filters
     applied_filters: Dict[str, Any] = Field(default_factory=dict)

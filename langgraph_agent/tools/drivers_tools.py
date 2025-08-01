@@ -7,38 +7,42 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.tools import tool
 
 from services import api_client
+import config
 
 logger = logging.getLogger(__name__)
 
 
 @tool
-def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict]:
+def get_drivers_for_city(city: str, page: int = 1) -> Dict[str, Any]:
     """
     Get drivers for a specific city with full details.
 
     Args:
         city: The city name to search for drivers
         page: Page number for pagination (default: 1)
-        limit: Number of drivers per page (default: 10)
 
     Returns:
-        List of driver dictionaries with complete information
+        Dictionary containing drivers and pagination info
     """
     logger.info(f"Getting drivers for {city} (page {page})")
 
-    # Get premium drivers
-    premium_drivers = api_client.get_premium_drivers(city, page, limit)
+    # Get premium drivers (20 at a time)
+    premium_drivers = api_client.get_premium_drivers(
+        city, page, config.DRIVERS_PER_FETCH
+    )
 
     if not premium_drivers:
         logger.info(f"No drivers found in {city}")
-        return []
+        return {"drivers": [], "page": page, "has_more": False, "total_fetched": 0}
 
-    logger.info(f"Found {len(premium_drivers)} premium drivers, fetching details...")
+    logger.info(
+        f"Found {len(premium_drivers)} premium drivers, fetching details in parallel..."
+    )
 
-    # Fetch details in parallel
+    # Fetch details in parallel for better performance
     drivers_with_details = []
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         # Submit all tasks
         future_to_driver = {
             executor.submit(fetch_driver_details, driver): driver
@@ -46,7 +50,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
         }
 
         # Collect results
-        for future in as_completed(future_to_driver, timeout=25):
+        for future in as_completed(future_to_driver, timeout=15):
             try:
                 result = future.result()
                 if result:
@@ -60,7 +64,13 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
     logger.info(
         f"Successfully fetched {len(drivers_with_details)} drivers with details"
     )
-    return drivers_with_details
+
+    return {
+        "drivers": drivers_with_details,
+        "page": page,
+        "has_more": len(premium_drivers) == config.DRIVERS_PER_FETCH,
+        "total_fetched": len(drivers_with_details),
+    }
 
 
 def fetch_driver_details(premium_driver: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -154,7 +164,6 @@ def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
     if not filters or not drivers:
         return drivers
 
-    # Work with a copy to preserve original data
     filtered_drivers = []
 
     for driver in drivers:
@@ -231,7 +240,6 @@ def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
                     passes_all_filters = False
                     break
 
-        # If driver passes all filters, add to results with full data
         if passes_all_filters:
             filtered_drivers.append(driver)
 
@@ -252,6 +260,28 @@ def compare_values(driver_value: float, operator: str, target_value: float) -> b
     elif operator == "==":
         return driver_value == target_value
     return False
+
+
+@tool
+def show_more_drivers(current_index: int, total_drivers: int) -> Dict[str, Any]:
+    """
+    Show next batch of drivers from already fetched list.
+
+    Args:
+        current_index: Current display index
+        total_drivers: Total number of drivers available
+
+    Returns:
+        Information about next batch
+    """
+    next_index = current_index + config.DRIVERS_PER_DISPLAY
+    has_more_in_current = next_index < total_drivers
+
+    return {
+        "next_index": next_index,
+        "has_more_in_current": has_more_in_current,
+        "should_fetch_new": not has_more_in_current and next_index >= total_drivers,
+    }
 
 
 @tool

@@ -31,12 +31,16 @@ def get_user_state(user_id: str) -> dict:
     if user_id not in user_conversations:
         user_conversations[user_id] = {
             "chat_history": [],
+            "all_fetched_drivers": [],
             "drivers_with_full_details": [],
             "filtered_drivers": [],
             "applied_filters": {},
             "pickup_location": None,
             "last_bot_response": None,
             "tool_calls": [],
+            "current_display_index": 0,
+            "current_page": 1,
+            "fetch_count": 0,
         }
     return user_conversations[user_id]
 
@@ -163,3 +167,4 @@ if __name__ == "__main__":
 
     print(f"🚀 Starting Cab Booking Slack Bot on port {config.PORT}")
     uvicorn.run(slack_bot, host="0.0.0.0", port=config.PORT)
+

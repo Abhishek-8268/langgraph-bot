@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_premium_drivers(
-    city: str, page: int = 1, limit: int = 10
+    city: str, page: int = 1, limit: int = config.DRIVERS_PER_FETCH
 ) -> List[Dict[str, Any]]:
     """Get premium drivers from API"""
     try:

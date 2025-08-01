@@ -15,7 +15,9 @@ from langgraph_agent.tools.drivers_tools import (
     filter_drivers,
     get_driver_details,
     remove_filters_from_search,
+    show_more_drivers,
 )
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ tools = [
     filter_drivers,
     get_driver_details,
     remove_filters_from_search,
+    show_more_drivers,
 ]
 
 # Initialize LLM
@@ -120,15 +123,28 @@ def tool_executor_node(state: dict) -> dict:
 
             # Update state based on tool
             if tool_name == "get_drivers_for_city":
-                state_updates["drivers_with_full_details"] = output
-                state_updates["filtered_drivers"] = output
+                new_drivers = output.get("drivers", [])
+
+                # Add to all fetched drivers
+                all_drivers = state_updates.get("all_fetched_drivers", [])
+                all_drivers.extend(new_drivers)
+
+                state_updates["all_fetched_drivers"] = all_drivers
+                state_updates["drivers_with_full_details"] = all_drivers
+                state_updates["filtered_drivers"] = all_drivers
                 state_updates["applied_filters"] = {}
                 state_updates["pickup_location"] = tool_args.get("city")
-                logger.info(f"Fetched {len(output)} drivers")
+                state_updates["current_display_index"] = 0
+                state_updates["current_page"] = output.get("page", 1)
+                state_updates["fetch_count"] = state_updates.get("fetch_count", 0) + 1
+
+                logger.info(
+                    f"Fetched {len(new_drivers)} drivers, total: {len(all_drivers)}"
+                )
 
             elif tool_name == "filter_drivers":
-                # Get the full driver list from state
-                drivers_to_filter = state_updates.get("drivers_with_full_details", [])
+                # Get all drivers to filter
+                drivers_to_filter = state_updates.get("all_fetched_drivers", [])
 
                 # Apply filters
                 new_filters = tool_args.get("filters", {})
@@ -137,7 +153,7 @@ def tool_executor_node(state: dict) -> dict:
                     **new_filters,
                 }
 
-                # Call filter with the full driver list
+                # Call filter with all drivers
                 from langgraph_agent.tools.drivers_tools import (
                     filter_drivers as filter_func,
                 )
@@ -148,12 +164,30 @@ def tool_executor_node(state: dict) -> dict:
 
                 state_updates["filtered_drivers"] = filtered_result
                 state_updates["applied_filters"] = combined_filters
-                output = filtered_result  # Use the filtered result
+                state_updates["current_display_index"] = 0
+                output = filtered_result
+
                 logger.info(
                     f"Applied filters: {combined_filters}, found {
                         len(filtered_result)
                     } drivers"
                 )
+
+            elif tool_name == "show_more_drivers":
+                info = output
+                state_updates["current_display_index"] = info.get("next_index", 0)
+
+                # Check if we need to fetch more
+                if info.get("should_fetch_new", False):
+                    current_page = state_updates.get("current_page", 1)
+                    fetch_count = state_updates.get("fetch_count", 0)
+
+                    if fetch_count < config.MAX_FETCH_DEPTH:
+                        # Need to fetch more drivers
+                        output = {
+                            "message": "need_more_drivers",
+                            "next_page": current_page + 1,
+                        }
 
             elif tool_name == "remove_filters_from_search":
                 keys_to_remove = tool_args.get("keys_to_remove", [])
@@ -162,7 +196,7 @@ def tool_executor_node(state: dict) -> dict:
                 if "all" in keys_to_remove:
                     state_updates["applied_filters"] = {}
                     state_updates["filtered_drivers"] = state_updates.get(
-                        "drivers_with_full_details", []
+                        "all_fetched_drivers", []
                     )
                 else:
                     for key in keys_to_remove:
@@ -171,18 +205,20 @@ def tool_executor_node(state: dict) -> dict:
 
                     # Re-apply remaining filters
                     if current_filters:
-                        full_list = state_updates.get("drivers_with_full_details", [])
+                        all_drivers = state_updates.get("all_fetched_drivers", [])
                         filtered = filter_drivers.invoke(
-                            {"drivers": full_list, "filters": current_filters}
+                            {"drivers": all_drivers, "filters": current_filters}
                         )
                         state_updates["filtered_drivers"] = filtered
                     else:
                         state_updates["filtered_drivers"] = state_updates.get(
-                            "drivers_with_full_details", []
+                            "all_fetched_drivers", []
                         )
 
+                state_updates["current_display_index"] = 0
+
             # Format output for LLM
-            output_str = format_tool_output(tool_name, output)
+            output_str = format_tool_output(tool_name, output, state_updates)
 
             tool_messages.append(
                 ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name)
@@ -203,48 +239,69 @@ def tool_executor_node(state: dict) -> dict:
     return state_updates
 
 
-def format_tool_output(tool_name: str, output: Any) -> str:
+def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
     """Format tool output for LLM"""
-    if tool_name in ["get_drivers_for_city", "filter_drivers"]:
-        # Create driver summary
-        if isinstance(output, str):
-            return output
+    if tool_name == "get_drivers_for_city":
+        # Get drivers to display (first 5)
+        all_drivers = state.get("all_fetched_drivers", [])
+        drivers_to_show = all_drivers[: config.DRIVERS_PER_DISPLAY]
 
-        if not output:
+        if not drivers_to_show:
             return json.dumps(
                 {"total_drivers_found": 0, "message": "No drivers found."}
             )
 
-        summary = {"total_drivers_found": len(output), "drivers": []}
+        summary = {
+            "total_drivers_fetched": len(all_drivers),
+            "showing_drivers": len(drivers_to_show),
+            "has_more": len(all_drivers) > config.DRIVERS_PER_DISPLAY,
+            "drivers": format_drivers_list(drivers_to_show),
+        }
 
-        # Include key info for up to 10 drivers
-        for driver in output[:10]:
-            # Get first vehicle info
-            vehicle = {}
-            if driver.get("vehicles") and len(driver["vehicles"]) > 0:
-                first_vehicle = driver["vehicles"][0]
-                vehicle = {
-                    "model": first_vehicle.get("model", "N/A"),
-                    "type": first_vehicle.get("type", "N/A"),
-                    "price_per_km": first_vehicle.get("per_km_cost", "N/A"),
-                }
+        return json.dumps(summary, indent=2)
 
-            summary["drivers"].append(
+    elif tool_name == "filter_drivers":
+        # Show first 5 of filtered results
+        filtered = output if isinstance(output, list) else []
+        drivers_to_show = filtered[: config.DRIVERS_PER_DISPLAY]
+
+        if not drivers_to_show:
+            return json.dumps(
                 {
-                    "id": driver.get("id"),
-                    "name": driver.get("name"),
-                    "phone": driver.get("phone"),
-                    "username": driver.get("username"),
-                    "profile_image": driver.get("profile_image"),
-                    "age": driver.get("age"),
-                    "experience": driver.get("experience"),
-                    "languages": driver.get("languages", []),
-                    "is_pet_allowed": driver.get("is_pet_allowed"),
-                    "is_married": driver.get("is_married"),
-                    "city": driver.get("city"),
-                    "vehicle": vehicle,
+                    "total_matching_drivers": 0,
+                    "message": "No drivers found matching the criteria.",
+                    "need_more_fetch": True,
                 }
             )
+
+        summary = {
+            "total_matching_drivers": len(filtered),
+            "showing_drivers": len(drivers_to_show),
+            "has_more": len(filtered) > config.DRIVERS_PER_DISPLAY,
+            "drivers": format_drivers_list(drivers_to_show),
+        }
+
+        return json.dumps(summary, indent=2)
+
+    elif tool_name == "show_more_drivers":
+        if output.get("message") == "need_more_drivers":
+            return json.dumps(
+                {"status": "need_fetch_more", "next_page": output.get("next_page")}
+            )
+
+        # Get next batch to show
+        current_index = state.get("current_display_index", 0)
+        drivers_list = state.get("filtered_drivers", [])
+
+        drivers_to_show = drivers_list[
+            current_index : current_index + config.DRIVERS_PER_DISPLAY
+        ]
+
+        summary = {
+            "showing_drivers": len(drivers_to_show),
+            "has_more": current_index + config.DRIVERS_PER_DISPLAY < len(drivers_list),
+            "drivers": format_drivers_list(drivers_to_show),
+        }
 
         return json.dumps(summary, indent=2)
 
@@ -252,6 +309,41 @@ def format_tool_output(tool_name: str, output: Any) -> str:
         return json.dumps(output, indent=2)
     else:
         return str(output)
+
+
+def format_drivers_list(drivers: List[Dict]) -> List[Dict]:
+    """Format driver list for display"""
+    formatted = []
+
+    for driver in drivers:
+        # Get first vehicle info
+        vehicle = {}
+        if driver.get("vehicles") and len(driver["vehicles"]) > 0:
+            first_vehicle = driver["vehicles"][0]
+            vehicle = {
+                "model": first_vehicle.get("model", "N/A"),
+                "type": first_vehicle.get("type", "N/A"),
+                "price_per_km": first_vehicle.get("per_km_cost", "N/A"),
+            }
+
+        formatted.append(
+            {
+                "id": driver.get("id"),
+                "name": driver.get("name"),
+                "phone": driver.get("phone"),
+                "username": driver.get("username"),
+                "profile_image": driver.get("profile_image"),
+                "age": driver.get("age"),
+                "experience": driver.get("experience"),
+                "languages": driver.get("languages", []),
+                "is_pet_allowed": driver.get("is_pet_allowed"),
+                "is_married": driver.get("is_married"),
+                "city": driver.get("city"),
+                "vehicle": vehicle,
+            }
+        )
+
+    return formatted
 
 
 def route_after_agent(state: dict) -> str:

@@ -30,9 +30,7 @@ def test_agent():
         print("Test 2: Filter query")
         state = result
         state["chat_history"].append(
-            HumanMessage(
-                content="Show me drivers with suv and age less than 30 with his full details"
-            )
+            HumanMessage(content="Show me drivers with language hindi")
         )
 
         result = cab_agent.invoke(state)
