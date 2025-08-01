@@ -1,5 +1,5 @@
 [project]
-name = "cabbot"
+name = "langgraph-bot"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,10 +9,10 @@ dependencies = [
     "langchain-core>=0.3.70",
     "langchain-google-vertexai>=2.0.27",
     "langgraph>=0.5.4",
-    "langgraph-prebuilt>=0.5.2",
     "pydantic>=2.11.7",
     "python-multipart>=0.0.20",
     "requests>=2.32.4",
     "slack-sdk>=3.36.0",
     "uvicorn>=0.35.0",
 ]
+
