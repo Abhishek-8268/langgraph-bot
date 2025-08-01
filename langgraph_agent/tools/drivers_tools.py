@@ -21,7 +21,7 @@ def remove_filters_from_search(keys_to_remove: List[str]) -> str:
     return f"Will attempt to remove the following filters: {', '.join(keys_to_remove)}"
 
 @tool
-def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict]:
+def get_drivers_for_city(city: str, page: int = 1, limit: int = 50) -> List[Dict]:
     """
     Get drivers for a specific city with full details - BATCH OPTIMIZED VERSION.
     
@@ -63,6 +63,7 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
         if not premium_drivers:
             print(f"📄 No drivers found on page {page}")
             return []
+        
         
         # Step 2: Get detailed info for ALL drivers in parallel - OPTIMIZED
         drivers_with_details = []
@@ -134,14 +135,14 @@ def get_drivers_for_city(city: str, page: int = 1, limit: int = 10) -> List[Dict
 
 
 @tool
-def get_drivers_with_pagination(city: str, max_pages: int = 5, filters: Dict[str, Any] = None) -> Dict[str, Any]:
+def get_drivers_with_pagination(city: str, max_pages: int = 10, filters: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Get drivers with smart pagination and filtering.
-    Fetches up to max_pages (50 drivers max) until enough filtered drivers are found.
+    Fetches up to max_pages (500 drivers max) until enough filtered drivers are found.
     
     Args:
         city: The city name to search for drivers
-        max_pages: Maximum pages to fetch (default: 5, max 50 drivers)
+        max_pages: Maximum pages to fetch (default: 5, max 500 drivers)
         filters: Optional filters to apply during fetching
     
     Returns:
@@ -214,8 +215,8 @@ def get_drivers_with_pagination(city: str, max_pages: int = 5, filters: Dict[str
     print(f"🎯 Final result: {len(all_drivers)} total, {len(filtered_drivers)} filtered from {pages_fetched} pages")
     return result
 
-# In drivers_tools.py
 
+# --- START: REWRITTEN FUNCTION ---
 def process_driver_data(premium_driver, details, driver_id):
     """Quickly process driver data without complex operations"""
     # Get profile image quickly
@@ -245,7 +246,8 @@ def process_driver_data(premium_driver, details, driver_id):
 
         vehicle_info = {
             "model": vehicle.get("model", "Unknown"),
-            "type": vehicle.get("vehicleType", "Unknown"),
+            # This logic is now more robust to handle different API key formats
+            "type": vehicle.get("vehicleType") or vehicle.get("vehicle_type") or "Unknown",
             "reg_no": vehicle.get("reg_no", ""),
             "per_km_cost": float(vehicle.get("perKmCost", 0)) if vehicle.get("perKmCost") else 0.0,
             "is_commercial": vehicle.get("is_commercial", False),
@@ -273,6 +275,7 @@ def process_driver_data(premium_driver, details, driver_id):
         "verified_languages": [{"name": l.get("name", ""), "verified": l.get("verified", False)} for l in details.get("verifiedLanguages", [])],
         "vehicles": vehicles
     }
+# --- END: REWRITTEN FUNCTION ---
 
 
 @tool  
@@ -463,50 +466,3 @@ def get_driver_details(driver_id: str) -> Optional[Dict]:
     except Exception as e:
         print(f"❌ Error getting driver details for {driver_id}: {e}")
         return None
-
-
-# Test function
-def test_working_tools():
-    """Test the working tools with real API calls"""
-    print("🧪 Testing working tools...")
-    
-    try:
-        # Test 1: Get drivers
-        print("\n1️⃣ Testing get_drivers_for_city...")
-        drivers = get_drivers_for_city.invoke({"city": "jaipur", "page": 1, "limit": 3})
-        print(f"Got {len(drivers)} drivers")
-        
-        if drivers:
-            print(f"Sample driver: {drivers[0]['name']} - {drivers[0]['age']} years old")
-            print(f"Languages: {drivers[0]['languages']}")
-            print(f"Vehicle: {drivers[0]['vehicles'][0]['model'] if drivers[0]['vehicles'] else 'No vehicle'}")
-            
-            # Test 2: Filter drivers
-            print("\n2️⃣ Testing filter_drivers...")
-            test_filters = {"language": "Hindi", "experience": {"operator": ">=", "value": 5}}
-            filtered = filter_drivers.invoke({"drivers": drivers, "filters": test_filters})
-            print(f"Filtered from {len(drivers)} to {len(filtered)} drivers")
-            
-            # Test 3: Get driver details
-            if drivers:
-                print("\n3️⃣ Testing get_driver_details...")
-                first_driver_id = drivers[0]["id"]
-                details = get_driver_details.invoke({"driver_id": first_driver_id})
-                if details:
-                    print(f"Got detailed info for: {details['name']}")
-                    print(f"Bio: {details['bio'][:100]}...")
-                else:
-                    print("❌ Failed to get driver details")
-        else:
-            print("❌ No drivers returned")
-            
-    except Exception as e:
-        print(f"❌ Error in test: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\n✅ Tool testing complete!")
-
-
-if __name__ == "__main__":
-    test_working_tools()
