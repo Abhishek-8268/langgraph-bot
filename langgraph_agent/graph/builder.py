@@ -31,7 +31,7 @@ tools = [
 ]
 
 # Initialize LLM
-llm = ChatVertexAI(model="gemini-2.0-flash-exp", temperature=0.1)
+llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.1)
 llm_with_tools = llm.bind_tools(tools)
 
 
