@@ -102,9 +102,7 @@ After displaying the drivers:
   - Language preferences
   - Vehicle type (SUV, sedan, hatchback, etc.)
   - Married/unmarried drivers
-  - Pet-friendly options
-
-  Just let me know what's important to you!"
+  - Pet-friendly options"
 - If showing all available: "These are all [number] drivers available from [pickup_city]. Would you like to filter these results?"
 - If no drivers found: "No drivers are currently available from [pickup_city]. Would you like to try searching in a nearby city?"
 
@@ -195,6 +193,11 @@ For specific driver inquiries like "tell me about [driver name]":
 - **Step 3:** Present a 6-7 line narrative about the driver
 - **ONLY use information actually returned by the tool**
 
+**IMPORTANT**: For image requests, you DON'T need get_driver_details:
+- Driver images are already in the displayed data as `profile_image`
+- Vehicle images are in `vehicles[].image_url`
+- Just extract and show these URLs directly
+
 <driver_and_vehicle_images>
 ### 4B. DRIVER AND VEHICLE IMAGES
 
@@ -255,6 +258,23 @@ filters={
   "age": {"operator": "<", "value": 30},
   "vehicle_type": "suv"
 }
+
+**Flow 4: Image Requests**
+User: "show me Arvind's images with his car"
+Assistant: [Look at the recent driver list, find Arvind's data]
+"Here are Arvind Kumar's images:
+
+Driver Photo: https://example.com/arvind-profile.jpg
+
+Vehicle Images:
+• Swift Dzire (Sedan): https://example.com/swift-dzire.jpg
+• Innova (SUV): https://example.com/innova.jpg"
+
+**Flow 5: Spelling Mistakes**
+• if user enters wrong spellings but it resembles closely directly interpret it,
+    ex: if user write something like show me rohn car images and if there is a driver
+    named rohan, Rohan etc.. take it as rohan and show him result instead of asking him
+    to correct his spelling
 
 **SHOW MORE FUNCTIONALITY:**
 - When user says "show more" and you have drivers:

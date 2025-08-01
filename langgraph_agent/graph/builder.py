@@ -375,6 +375,8 @@ def format_drivers_list(drivers: List[Dict]) -> List[Dict]:
                 "model": first_vehicle.get("model", "N/A"),
                 "type": first_vehicle.get("type", "N/A"),
                 "price_per_km": first_vehicle.get("per_km_cost", "N/A"),
+                # Include image URL
+                "image_url": first_vehicle.get("image_url"),
             }
 
         formatted.append(
@@ -391,6 +393,8 @@ def format_drivers_list(drivers: List[Dict]) -> List[Dict]:
                 "is_married": driver.get("is_married"),
                 "city": driver.get("city"),
                 "vehicle": vehicle,
+                # Include all vehicles for image requests
+                "vehicles": driver.get("vehicles", []),
             }
         )
 
