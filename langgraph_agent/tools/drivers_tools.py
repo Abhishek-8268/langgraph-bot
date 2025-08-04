@@ -150,10 +150,13 @@ def process_driver_data(premium_driver: Dict, details: Dict, driver_id: str) -> 
     }
 
 
+# langgraph_agent/tools/drivers_tools.py
+
+
 @tool
 def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
     """
-    Filter drivers based on various criteria.
+    Filter drivers based on various criteria in a single pass.
 
     Args:
         drivers: List of driver dictionaries to filter
@@ -167,103 +170,64 @@ def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
     if not filters or not drivers:
         return drivers
 
-    filtered_drivers = []
-
-    for driver in drivers:
-        # Check each filter
-        passes_all_filters = True
-
-        for filter_key, filter_value in filters.items():
-            if filter_key == "age" and isinstance(filter_value, dict):
-                operator = filter_value.get("operator", ">=")
-                value = filter_value.get("value")
-                if value is not None:
-                    driver_age = driver.get("age")
-                    if driver_age is None or not compare_values(
-                        driver_age, operator, value
-                    ):
-                        passes_all_filters = False
-                        break
-
-            elif filter_key == "experience" and isinstance(filter_value, dict):
-                operator = filter_value.get("operator", ">=")
-                value = filter_value.get("value")
-                if value is not None:
-                    driver_exp = driver.get("experience", 0)
-                    if not compare_values(driver_exp, operator, value):
-                        passes_all_filters = False
-                        break
-
-            elif filter_key == "language" and isinstance(filter_value, str):
-                target_lang = filter_value.lower()
-                languages = driver.get("languages", [])
-                # Check both languages array and verified_languages
-                has_language = any(lang.lower() == target_lang for lang in languages)
-
-                if not has_language:
-                    verified_langs = driver.get("verified_languages", [])
-                    has_language = any(
-                        vl.get("name", "").lower() == target_lang
-                        for vl in verified_langs
-                        if isinstance(vl, dict)
-                    )
-
-                if not has_language:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "vehicle_type" and isinstance(filter_value, str):
-                target_type = filter_value.lower()
-                vehicles = driver.get("vehicles", [])
-                # Check for partial matches and common variations
-                if not any(
+    # Pre-compile filter checks for efficiency
+    filter_checks = []
+    for key, value in filters.items():
+        if key == "age" and isinstance(value, dict):
+            filter_checks.append(
+                lambda d: compare_values(
+                    d.get("age"), value.get("operator", ">="), value.get("value")
+                )
+            )
+        elif key == "experience" and isinstance(value, dict):
+            filter_checks.append(
+                lambda d: compare_values(
+                    d.get("experience", 0),
+                    value.get("operator", ">="),
+                    value.get("value"),
+                )
+            )
+        elif key == "language" and isinstance(value, str):
+            target_lang = value.lower()
+            filter_checks.append(
+                lambda d: any(
+                    lang.lower() == target_lang for lang in d.get("languages", [])
+                )
+                or any(
+                    vl.get("name", "").lower() == target_lang
+                    for vl in d.get("verified_languages", [])
+                    if isinstance(vl, dict)
+                )
+            )
+        elif key == "vehicle_type" and isinstance(value, str):
+            target_type = value.lower()
+            filter_checks.append(
+                lambda d: any(
                     target_type in v.get("type", "").lower()
                     or v.get("type", "").lower() in target_type
-                    or (
-                        target_type == "sedan" and "sedan" in v.get("model", "").lower()
-                    )
-                    for v in vehicles
-                ):
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "is_married" and isinstance(filter_value, bool):
-                if driver.get("is_married") != filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "is_pet_allowed" and isinstance(filter_value, bool):
-                if driver.get("is_pet_allowed") != filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "min_connections" and isinstance(
-                filter_value, (int, float)
-            ):
-                if driver.get("connections", 0) < filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "min_experience" and isinstance(
-                filter_value, (int, float)
-            ):
-                if driver.get("experience", 0) < filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "max_cost_per_km" and isinstance(
-                filter_value, (int, float)
-            ):
-                vehicles = driver.get("vehicles", [])
-                has_affordable = any(
-                    v.get("per_km_cost", float("inf")) <= filter_value for v in vehicles
+                    for v in d.get("vehicles", [])
                 )
-                if not has_affordable:
-                    passes_all_filters = False
-                    break
+            )
+        elif key == "is_married" and isinstance(value, bool):
+            filter_checks.append(lambda d: d.get("is_married") == value)
+        elif key == "is_pet_allowed" and isinstance(value, bool):
+            filter_checks.append(lambda d: d.get("is_pet_allowed") == value)
+        elif key == "min_connections" and isinstance(value, (int, float)):
+            filter_checks.append(lambda d: d.get("connections", 0) >= value)
+        elif key == "min_experience" and isinstance(value, (int, float)):
+            filter_checks.append(lambda d: d.get("experience", 0) >= value)
+        elif key == "max_cost_per_km" and isinstance(value, (int, float)):
+            filter_checks.append(
+                lambda d: any(
+                    v.get("per_km_cost", float("inf")) <= value
+                    for v in d.get("vehicles", [])
+                )
+            )
 
-        if passes_all_filters:
-            filtered_drivers.append(driver)
+    # Filter drivers in a single list comprehension
+    filtered_drivers = [
+        driver for driver in drivers if all(check(driver) for check in filter_checks)
+    ]
 
     logger.info(f"Filtering complete: {len(filtered_drivers)} drivers remaining")
     return filtered_drivers
