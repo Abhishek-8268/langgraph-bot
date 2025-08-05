@@ -1,198 +1,176 @@
-# main.py
 import os
-import config
-import logging
-import asyncio
-from typing import Dict, Any
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
-
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
+from pydantic import BaseModel
 
+# Import your existing agent
 from langgraph_agent.graph.builder import app as cab_agent
-from services.slack_service import SlackService
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Simple setup
+app = FastAPI(title="Cab Booking Bot")
+slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
-# Initialize FastAPI
-slack_bot = FastAPI(title="Cab Booking Slack Bot")
-
-# Initialize services
-slack_service = SlackService()
-
-# Store user conversations with timestamps
+# Simple in-memory storage (for demo - use Redis/DB in production)
 user_conversations = {}
+processed_messages = set()  # Track processed messages to avoid duplicates
 
-# Thread pool for processing messages
-executor = ThreadPoolExecutor(max_workers=10)
+# --- New Pydantic model for the /chat endpoint ---
+class ChatRequest(BaseModel):
+    user_id: str
+    message: str
 
-# Lock for thread-safe operations
-conversations_lock = asyncio.Lock()
-
-
-class UserSession:
-    """User session with timestamp and state"""
-
-    def __init__(self):
-        self.state = {
+def get_user_state(user_id: str) -> dict:
+    """Get or create user conversation state"""
+    if user_id not in user_conversations:
+        user_conversations[user_id] = {
             "chat_history": [],
-            "all_fetched_drivers": [],
             "drivers_with_full_details": [],
             "filtered_drivers": [],
             "applied_filters": {},
             "pickup_location": None,
             "last_bot_response": None,
-            "tool_calls": [],
-            "current_display_index": 0,
-            "current_page": 1,
-            "fetch_count": 0,
+            "tool_calls": []
         }
-        self.last_activity = datetime.now()
-        self.is_processing = False
+    return user_conversations[user_id]
 
+def is_duplicate_message(event: dict) -> bool:
+    """Check if this event was already processed using multiple identifiers"""
+    user_id = event.get("user")
+    text = event.get("text", "").strip()
+    timestamp = event.get("ts", "")
+    event_ts = event.get("event_ts", "")
 
-async def cleanup_old_sessions():
-    """Remove sessions older than 15 minutes"""
-    while True:
-        try:
-            async with conversations_lock:
-                current_time = datetime.now()
-                expired_users = []
+    # Create multiple unique identifiers
+    identifiers = [
+        f"{user_id}:{text}:{timestamp}",
+        f"{user_id}:{timestamp}",
+        f"event:{event_ts}" if event_ts else None
+    ]
 
-                for user_id, session in user_conversations.items():
-                    if current_time - session.last_activity > timedelta(minutes=15):
-                        expired_users.append(user_id)
+    # Remove None values
+    identifiers = [id for id in identifiers if id]
 
-                for user_id in expired_users:
-                    del user_conversations[user_id]
-                    logger.info(f"Cleaned up expired session for user {user_id}")
+    # Check if any identifier was already processed
+    for identifier in identifiers:
+        if identifier in processed_messages:
+            print(f"🔄 Duplicate detected: {identifier}")
+            return True
 
-                if expired_users:
-                    logger.info(f"Cleaned up {len(expired_users)} expired sessions")
+    # Add all identifiers to processed set
+    for identifier in identifiers:
+        processed_messages.add(identifier)
 
-        except Exception as e:
-            logger.error(f"Error in cleanup task: {e}")
+    # Keep only last 200 messages to prevent memory leak
+    if len(processed_messages) > 200:
+        # Keep only the newest 100
+        new_set = set(list(processed_messages)[-100:])
+        processed_messages.clear()
+        processed_messages.update(new_set)
 
-        # Run cleanup every 5 minutes
-        await asyncio.sleep(300)
+    return False
 
+def process_message(user_id: str, message: str) -> str:
+    """Process user message through cab agent - OPTIMIZED"""
+    print(f"🔄 Processing for {user_id}: {message}")
 
-async def get_user_session(user_id: str) -> UserSession:
-    """Get or create user session"""
-    async with conversations_lock:
-        if user_id not in user_conversations:
-            user_conversations[user_id] = UserSession()
+    # Get user state
+    state = get_user_state(user_id)
 
-        session = user_conversations[user_id]
-        session.last_activity = datetime.now()
-        return session
-
-
-def process_message_sync(state: dict, message: str) -> dict:
-    """Synchronous message processing"""
-    state["chat_history"].append(HumanMessage(content=message))
-
-    try:
-        # Process through agent
-        result = cab_agent.invoke(state)
-        return result
-    except Exception as e:
-        logger.error(f"Error in agent processing: {e}")
-        raise
-
-
-async def process_message_async(user_id: str, message: str) -> str:
-    """Process user message asynchronously"""
-    logger.info(f"Processing message from {user_id}: {message}")
-
-    # Get user session
-    session = await get_user_session(user_id)
-
-    # Check if already processing
-    if session.is_processing:
-        return (
-            "⏳ Your previous request is still being processed. Please wait a moment..."
-        )
-
-    # Handle reset
+    # Handle simple commands
     if message.lower().strip() == "reset":
-        async with conversations_lock:
-            user_conversations[user_id] = UserSession()
+        # Clear the specific user's conversation
+        if user_id in user_conversations:
+            del user_conversations[user_id]
         return "🔄 Reset! Tell me your pickup location to find drivers."
 
-    # Handle max drivers reached
-    if session.state.get("fetch_count", 0) >= config.MAX_FETCH_DEPTH:
-        total_drivers = len(session.state.get("all_fetched_drivers", []))
-        if total_drivers >= config.MAX_TOTAL_DRIVERS:
-            # Still allow filtering on existing drivers
-            if any(
-                word in message.lower()
-                for word in [
-                    "filter",
-                    "show",
-                    "age",
-                    "language",
-                    "vehicle",
-                    "pet",
-                    "married",
-                ]
-            ):
-                logger.info(f"Applying filter on {total_drivers} existing drivers")
-            else:
-                return f"I've already fetched the maximum of {config.MAX_TOTAL_DRIVERS} drivers. You can apply filters to find specific drivers or type 'reset' to start a new search."
+    # Add message to chat history
+    state["chat_history"].append(HumanMessage(content=message))
 
+    # Process through your existing agent with timeout
     try:
-        # Mark as processing
-        session.is_processing = True
+        print(f"🤖 Invoking agent...")
+        import signal
 
-        # Run processing in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            executor,
-            process_message_sync,
-            session.state.copy(),  # Pass a copy to avoid conflicts
-            message,
-        )
+        # Set a timeout for the agent call
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Agent call timed out")
 
-        # Update session state
-        async with conversations_lock:
-            session.state = result
-            session.is_processing = False
+        # Set timeout to 45 seconds
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(45)
 
-        # Extract response
-        response = result.get("last_bot_response")
+        try:
+            result = cab_agent.invoke(state)
+        finally:
+            signal.alarm(0)  # Cancel the alarm
 
+        # Ensure result is valid
+        if not isinstance(result, dict):
+            print(f"⚠️ Agent returned non-dict: {type(result)}")
+            return "Sorry, I had a technical issue. Please try again."
+
+        # Update state
+        user_conversations[user_id] = result
+        print(f"✅ State updated for {user_id}")
+
+        # Extract response with better fallbacks
+        response = None
+
+        # Try 1: Direct last_bot_response
+        if result.get("last_bot_response"):
+            response = result["last_bot_response"]
+            print(f"📤 Got direct response: {response[:50]}...")
+
+        # Try 2: Last AI message from chat history
         if not response:
-            # Try to get from chat history
-            for msg in reversed(result.get("chat_history", [])):
-                if hasattr(msg, "content") and "AI" in str(type(msg)):
-                    response = msg.content
-                    break
+            chat_history = result.get("chat_history", [])
+            for msg in reversed(chat_history):
+                if hasattr(msg, 'content') and 'AI' in str(type(msg)):
+                    if msg.content and msg.content.strip():
+                        response = msg.content
+                        print(f"📤 Got AI message: {response[:50]}...")
+                        break
 
+        # Try 3: Check if we have drivers and create a response
         if not response:
-            response = "I'm here to help you find drivers! Please tell me your pickup location."
+            drivers = result.get("drivers_with_full_details", [])
+            filtered_drivers = result.get("filtered_drivers", [])
+
+            if drivers or filtered_drivers:
+                response = f"I found {len(drivers or filtered_drivers)} drivers for you. Please let me know what specific information you'd like about them."
+                print(f"📤 Generated fallback response")
+
+        # Final fallback
+        if not response or not response.strip():
+            response = "I'm here to help you find drivers! Please tell me your pickup location or what you're looking for."
+            print(f"📤 Using final fallback response")
 
         return response
 
+    except TimeoutError:
+        print(f"⏰ Agent call timed out for {user_id}")
+        return "Sorry, that request is taking too long. Please try again with a simpler query or type 'reset'."
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
-        session.is_processing = False
-        return "Sorry, I encountered an error. Please try again or type 'reset'."
+        print(f"❌ Error processing message: {e}")
+        import traceback
+        traceback.print_exc()
+        return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
+
+# --- New API Endpoint for App Integration ---
+@app.post("/chat")
+async def chat_with_bot(chat_request: ChatRequest):
+    """
+    Handles a chat message from a user and returns the bot's response.
+    Maintains conversation context using user_id.
+    """
+    response = process_message(chat_request.user_id, chat_request.message)
+    return {"response": response}
 
 
-@slack_bot.on_event("startup")
-async def startup_event():
-    """Start background tasks on startup"""
-    asyncio.create_task(cleanup_old_sessions())
-
-
-@slack_bot.post("/slack/events")
-async def handle_slack_events(request: Request, background_tasks: BackgroundTasks):
-    """Handle Slack events"""
+@app.post("/slack/events")
+async def handle_slack_events(request: Request):
+    """Handle Slack events - FIXED for multi-user access"""
     data = await request.json()
 
     # URL verification
@@ -201,34 +179,100 @@ async def handle_slack_events(request: Request, background_tasks: BackgroundTask
 
     # Handle messages
     event = data.get("event", {})
-    if (
-        event.get("type") == "message"
-        and "bot_id" not in event
-        and "subtype" not in event
-    ):
-        # Skip duplicates
-        if slack_service.is_duplicate_message(event):
+    if (event.get("type") == "message" and
+        "bot_id" not in event and
+        "subtype" not in event):
+
+        # Skip if duplicate event
+        if is_duplicate_message(event):
             return {"status": "ok"}
 
         user_id = event.get("user")
         channel = event.get("channel")
         text = event.get("text", "").strip()
+        channel_type = event.get("channel_type", "")
 
-        if not user_id or not text:
+        # Skip if no text
+        if not text:
             return {"status": "ok"}
 
-        logger.info(f"Message from {user_id}: {text}")
+        print(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
 
-        # Process message asynchronously
-        response = await process_message_async(user_id, text)
+        # Send immediate acknowledgment for search queries
+        if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
+            try:
+                # Try to send acknowledgment
+               slack_client.chat_postMessage(
+               channel=channel,
+               text=f"🚗 Thinking...",
+               as_user=False,
+               username="Cab Bot"
+               )
+               print("📤 Sent immediate acknowledgment")
+            except Exception as ack_error:
+                print(f"⚠️ Failed to send acknowledgment: {ack_error}")
+                # Don't fail the whole process if acknowledgment fails
 
-        # Send response in background to not block
-        background_tasks.add_task(slack_service.send_message, channel, f"🚗 {response}")
+        # Process message (this is the slow part)
+        response = process_message(user_id, text)
+
+        # Ensure we have a valid response
+        if not response or not response.strip():
+            response = "I'm here to help you find drivers! Please tell me your pickup location."
+
+        # Send final response with multiple fallback strategies
+        success = False
+
+        # Strategy 1: Try original channel
+        try:
+            slack_client.chat_postMessage(
+                channel=channel,
+                text=f"🚗 {response}"
+            )
+            print(f"✅ Sent response to channel {channel}")
+            success = True
+        except Exception as e:
+            print(f"❌ Failed to send to channel {channel}: {e}")
+
+        # Strategy 2: If channel failed, try user DM with conversation
+        if not success:
+            try:
+                # First open a DM conversation with the user
+                dm_response = slack_client.conversations_open(users=[user_id])
+                if dm_response["ok"]:
+                    dm_channel = dm_response["channel"]["id"]
+                    slack_client.chat_postMessage(
+                        channel=dm_channel,
+                        text=f"🚗 {response}\n\n_Note: I'm replying here because I don't have access to send messages in the other channel._"
+                    )
+                    print(f"✅ Sent as DM to {user_id} via opened conversation")
+                    success = True
+                else:
+                    print(f"❌ Failed to open DM with {user_id}: {dm_response}")
+            except Exception as dm_error:
+                print(f"❌ Failed to send DM via conversation: {dm_error}")
+
+        # Strategy 3: Last resort - try direct user ID
+        if not success:
+            try:
+                slack_client.chat_postMessage(
+                    channel=user_id,
+                    text=f"🚗 {response}\n\n_Note: Having trouble with channel permissions. You might need to add me to the channel or your admin needs to update my permissions._"
+                )
+                print(f"✅ Sent as direct DM to {user_id}")
+                success = True
+            except Exception as direct_error:
+                print(f"❌ Failed direct DM: {direct_error}")
+
+        # Strategy 4: If all else fails, log the issue
+        if not success:
+            print(f"❌ COMPLETE FAILURE to send message to user {user_id}")
+            print(f"   Response was: {response[:100]}...")
+            # You might want to store this in a database or send to an error channel
 
     return {"status": "ok"}
 
-
-@slack_bot.post("/slack/commands")
+@app.post("/slack/commands")
 async def handle_slash_commands(request: Request):
     """Handle /cab slash command"""
     form_data = await request.form()
@@ -236,62 +280,93 @@ async def handle_slash_commands(request: Request):
     text = form_data.get("text", "").strip()
 
     if not text:
-        response = (
-            "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
-        )
+        response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
     else:
-        response = await process_message_async(user_id, text)
+        response = process_message(user_id, text)
 
     return {"text": f"🚗 {response}"}
 
+@app.get("/test_agent/{message}")
+async def test_agent_directly(message: str):
+    """Test the agent directly without Slack to debug issues"""
+    try:
+        test_user = "test_user"
+        response = process_message(test_user, message)
+        state = user_conversations.get(test_user, {})
 
-@slack_bot.get("/")
+        return {
+            "message": message,
+            "response": response,
+            "response_length": len(response),
+            "state_keys": list(state.keys()),
+            "chat_history_length": len(state.get("chat_history", [])),
+            "drivers_count": len(state.get("drivers_with_full_details", [])),
+            "last_bot_response": state.get("last_bot_response", "")[:100] + "..."
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/debug/{user_id}")
+async def debug_user(user_id: str):
+    """Debug user state"""
+    if user_id in user_conversations:
+        state = user_conversations[user_id]
+        return {
+            "user_id": user_id,
+            "messages": len(state.get("chat_history", [])),
+            "drivers": len(state.get("drivers_with_full_details", [])),
+            "pickup": state.get("pickup_location"),
+            "last_response": state.get("last_bot_response", "")[:200] + "...",
+            "processed_messages_count": len(processed_messages)
+        }
+    return {"error": "User not found"}
+
+@app.get("/clear_cache")
+async def clear_cache():
+    """Clear message cache and user states (for debugging)"""
+    global processed_messages, user_conversations
+    processed_messages.clear()
+    user_conversations.clear()
+    return {"status": "Cache cleared"}
+
+@app.get("/")
 async def home():
-    """Status page"""
-    active_sessions = len(user_conversations)
-    processing_count = sum(1 for s in user_conversations.values() if s.is_processing)
-
+    """Simple status page"""
     return {
         "status": "running",
         "bot": "Cab Booking Assistant",
-        "active_sessions": active_sessions,
-        "processing_requests": processing_count,
-        "session_timeout": "15 minutes",
+        "active_users": len(user_conversations),
+        "processed_messages": len(processed_messages),
+        "endpoints": {
+            "chat": "/chat (POST)",
+            "slack_events": "/slack/events (POST)",
+            "slack_commands": "/slack/commands (POST)",
+            "test_agent": "/test_agent/{message} (GET)",
+            "debug": "/debug/{user_id} (GET)",
+            "clear_cache": "/clear_cache (GET)",
+            "health": "/health (GET)"
+        }
     }
 
-
-@slack_bot.get("/health")
+@app.get("/health")
 async def health():
     """Health check"""
-    return {"status": "healthy", "active_sessions": len(user_conversations)}
-
-
-@slack_bot.get("/stats")
-async def stats():
-    """Get detailed statistics"""
-    stats = {
-        "total_sessions": len(user_conversations),
-        "processing_sessions": sum(
-            1 for s in user_conversations.values() if s.is_processing
-        ),
-        "sessions_by_state": {},
-    }
-
-    for user_id, session in user_conversations.items():
-        drivers_count = len(session.state.get("all_fetched_drivers", []))
-        fetch_count = session.state.get("fetch_count", 0)
-        key = f"fetches_{fetch_count}_drivers_{drivers_count}"
-        stats["sessions_by_state"][key] = stats["sessions_by_state"].get(key, 0) + 1
-
-    return stats
-
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     import uvicorn
 
-    if not config.SLACK_BOT_TOKEN:
+    # Check environment
+    if not os.environ.get("SLACK_BOT_TOKEN"):
         print("❌ Set SLACK_BOT_TOKEN environment variable")
-        exit(1)
+        print("   export SLACK_BOT_TOKEN='xoxb-your-token'")
+        # For the app endpoint, we don't strictly need the slack token,
+        # but other parts of the app might.
+        # So we'll leave this check in.
+        # exit(1) # You can comment this out if you are not using slack
 
-    print(f"🚀 Starting Cab Booking Slack Bot on port {config.PORT}")
-    uvicorn.run(slack_bot, host="0.0.0.0", port=config.PORT)
+    print("🚀 Starting Cab Booking Bot API")
+
+    port = int(os.environ.get("PORT", 8080))
+    print(f"📍 Server running on: http://localhost:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
