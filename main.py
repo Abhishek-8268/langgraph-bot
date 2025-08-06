@@ -165,7 +165,14 @@ async def chat_with_bot(chat_request: ChatRequest):
     Maintains conversation context using user_id.
     """
     response = process_message(chat_request.user_id, chat_request.message)
-    return {"response": response}
+    
+    # Determine the tag
+    if "Driver Name:" in response and "• City:" in response:
+        type = "driverList"
+    else:
+         type = "text"
+        
+    return {"response": response, "type": type}
 
 
 @app.post("/slack/events")
