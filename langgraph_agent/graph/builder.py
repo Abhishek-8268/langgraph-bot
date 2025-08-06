@@ -119,7 +119,12 @@ def tool_executor_node(state: dict) -> dict:
 
         try:
             # Execute tool
-            output = tool_to_call.invoke(tool_args)
+            if tool_name == "get_driver_details":
+                tool_args["drivers"] = state_updates.get("all_fetched_drivers", [])
+                output = tool_to_call.invoke(tool_args)
+            else:
+                output = tool_to_call.invoke(tool_args)
+
 
             # Update state based on tool
             if tool_name == "get_drivers_for_city":
@@ -143,50 +148,31 @@ def tool_executor_node(state: dict) -> dict:
                 )
 
             elif tool_name == "filter_drivers":
-                # Get all drivers to filter
                 drivers_to_filter = state_updates.get("all_fetched_drivers", [])
-
-                # Apply filters
                 new_filters = tool_args.get("filters", {})
 
-                # IMPORTANT: For new filter requests, replace old filters
-                # This prevents the issue where it can't find drivers when applying new filters
-                if new_filters:
-                    combined_filters = new_filters
-                else:
-                    combined_filters = {
-                        **state_updates.get("applied_filters", {}),
-                        **new_filters,
-                    }
+                # FIX: Accumulate filters by updating the existing ones
+                combined_filters = state_updates.get("applied_filters", {}).copy()
+                combined_filters.update(new_filters)
 
-                # Log for debugging
                 logger.info(
-                    f"Filtering {len(drivers_to_filter)} drivers with filters: {
-                        combined_filters
-                    }"
+                    f"Filtering {len(drivers_to_filter)} drivers with filters: {combined_filters}"
                 )
 
-                # Call filter with all drivers
-                from langgraph_agent.tools.drivers_tools import (
-                    filter_drivers as filter_func,
-                )
-
+                from langgraph_agent.tools.drivers_tools import filter_drivers as filter_func
                 filtered_result = filter_func.invoke(
                     {"drivers": drivers_to_filter, "filters": combined_filters}
                 )
 
-                # Check if we've reached max fetch limit
                 fetch_count = state_updates.get("fetch_count", 0)
                 total_drivers = len(drivers_to_filter)
 
-                # If we don't have enough matching drivers and haven't reached limit
                 if (
                     len(filtered_result) < config.DRIVERS_PER_DISPLAY
                     and fetch_count < config.MAX_FETCH_DEPTH
                 ):
                     current_page = state_updates.get("current_page", 1)
 
-                    # Store current filtered results
                     state_updates["filtered_drivers"] = filtered_result
                     state_updates["applied_filters"] = combined_filters
                     state_updates["need_more_fetch"] = True
@@ -205,22 +191,18 @@ def tool_executor_node(state: dict) -> dict:
                     output = filtered_result
 
                 logger.info(
-                    f"Applied filters: {combined_filters}, found {
-                        len(filtered_result)
-                    } drivers"
+                    f"Applied filters: {combined_filters}, found {len(filtered_result)} drivers"
                 )
 
             elif tool_name == "show_more_drivers":
                 info = output
                 state_updates["current_display_index"] = info.get("next_index", 0)
 
-                # Check if we need to fetch more
                 if info.get("should_fetch_new", False):
                     current_page = state_updates.get("current_page", 1)
                     fetch_count = state_updates.get("fetch_count", 0)
 
                     if fetch_count < config.MAX_FETCH_DEPTH:
-                        # Need to fetch more drivers
                         output = {
                             "message": "need_more_drivers",
                             "next_page": current_page + 1,
@@ -240,7 +222,6 @@ def tool_executor_node(state: dict) -> dict:
                         current_filters.pop(key, None)
                     state_updates["applied_filters"] = current_filters
 
-                    # Re-apply remaining filters
                     if current_filters:
                         all_drivers = state_updates.get("all_fetched_drivers", [])
                         filtered = filter_drivers.invoke(
@@ -251,12 +232,9 @@ def tool_executor_node(state: dict) -> dict:
                         state_updates["filtered_drivers"] = state_updates.get(
                             "all_fetched_drivers", []
                         )
-
                 state_updates["current_display_index"] = 0
 
-            # Format output for LLM
             output_str = format_tool_output(tool_name, output, state_updates)
-
             tool_messages.append(
                 ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name)
             )
@@ -269,12 +247,10 @@ def tool_executor_node(state: dict) -> dict:
                 )
             )
 
-    # Update chat history with tool results
     state_updates["chat_history"] = state.get("chat_history", []) + tool_messages
     state_updates["tool_calls"] = []
 
     return state_updates
-
 
 def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
     """Format tool output for LLM"""
@@ -355,6 +331,12 @@ def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
         }
 
         return json.dumps(summary, indent=2)
+        
+    elif tool_name == "get_driver_details":
+        if not output:
+            return json.dumps({"error": "Driver not found"})
+        return json.dumps(format_drivers_list([output])[0], indent=2)
+
 
     elif isinstance(output, (dict, list)):
         return json.dumps(output, indent=2)

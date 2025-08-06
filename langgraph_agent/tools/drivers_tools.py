@@ -220,20 +220,29 @@ def remove_filters_from_search(keys_to_remove: List[str]) -> str:
 
 
 @tool
-def get_driver_details(driver_id: str) -> Optional[Dict]:
+def get_driver_details(driver_id: str, drivers: List[Dict] = []) -> Optional[Dict]:
     """
     Get detailed information for a specific driver by their ID.
+    Searches the provided list of drivers first, then falls back to an API call.
 
     Args:
         driver_id: The unique ID of the driver
+        drivers: (Optional) A list of driver dictionaries to search through.
 
     Returns:
         Dictionary with detailed driver information or None if not found
     """
     logger.info(f"Getting details for driver {driver_id}")
-    # The new API doesn't have a dedicated endpoint for single driver details.
-    # We can simulate it by fetching a list with a filter for the ID.
-    # This assumes the API supports filtering by 'id'.
+
+    # First, try to find the driver in the provided list
+    if drivers:
+        for driver in drivers:
+            if driver.get("id") == driver_id:
+                logger.info(f"Found driver {driver_id} in the existing list.")
+                return driver
+
+    # If not found in the list, fallback to the API call
+    logger.info(f"Driver {driver_id} not in list, calling API.")
     drivers_data = api_client.get_drivers(city="", limit=1, filters={"id": driver_id})
 
     if not drivers_data:
