@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
 # Import your existing agent
 from langgraph_agent.graph.builder import app as cab_agent
@@ -10,7 +11,13 @@ from langgraph_agent.graph.builder import app as cab_agent
 # Simple setup
 app = FastAPI(title="Cab Booking Bot")
 slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
-
+app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "https://cabswale.ai"], # Replace with your allowed origins
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
+        allow_headers=["*"], # Or specific headers
+    )
 # Simple in-memory storage (for demo - use Redis/DB in production)
 user_conversations = {}
 processed_messages = set()  # Track processed messages to avoid duplicates
@@ -33,6 +40,23 @@ def get_user_state(user_id: str) -> dict:
             "tool_calls": []
         }
     return user_conversations[user_id]
+
+# --- New API Endpoint for App Integration ---
+@app.post("/chat")
+async def chat_with_bot(chat_request: ChatRequest):
+    """
+    Handles a chat message from a user and returns the bot's response.
+    Maintains conversation context using user_id.
+    """
+    response = process_message(chat_request.user_id, chat_request.message)
+    
+    # Determine the tag
+    if "Driver Name:" in response and "• City:" in response:
+        type = "driverList"
+    else:
+         type = "text"
+        
+    return {"response": response, "type": type}
 
 def is_duplicate_message(event: dict) -> bool:
     """Check if this event was already processed using multiple identifiers"""
