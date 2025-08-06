@@ -3,7 +3,6 @@
 
 import logging
 from typing import List, Dict, Any, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.tools import tool
 
 from services import api_client
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 @tool
 def get_drivers_for_city(city: str, page: int = 1) -> Dict[str, Any]:
     """
-    Get drivers for a specific city with full details.
+    Get drivers for a specific city with full details using the new API.
 
     Args:
         city: The city name to search for drivers
@@ -24,133 +23,68 @@ def get_drivers_for_city(city: str, page: int = 1) -> Dict[str, Any]:
     Returns:
         Dictionary containing drivers and pagination info
     """
-    logger.info(f"Getting drivers for {city} (page {page})")
+    logger.info(f"Getting drivers for {city} (page {page}) using new API")
 
-    # Get premium drivers (20 at a time)
-    premium_drivers = api_client.get_premium_drivers(
-        city, page, config.DRIVERS_PER_FETCH
-    )
+    drivers_data = api_client.get_drivers(city, page, config.DRIVERS_PER_FETCH)
 
-    if not premium_drivers:
+    if not drivers_data:
         logger.info(f"No drivers found in {city}")
         return {"drivers": [], "page": page, "has_more": False, "total_fetched": 0}
 
-    logger.info(
-        f"Found {len(premium_drivers)} premium drivers, fetching details in parallel..."
-    )
+    processed_drivers = [
+        process_driver_data(driver)
+        for driver in drivers_data
+        if driver is not None
+    ]
 
-    # Fetch details in parallel for better performance
-    drivers_with_details = []
-
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        # Submit all tasks
-        future_to_driver = {
-            executor.submit(fetch_driver_details, driver): driver
-            for driver in premium_drivers
-        }
-
-        # Collect results
-        for future in as_completed(future_to_driver, timeout=15):
-            try:
-                result = future.result()
-                if result:
-                    drivers_with_details.append(result)
-            except Exception as e:
-                driver = future_to_driver[future]
-                logger.error(
-                    f"Failed to fetch details for driver {driver.get('id')}: {e}"
-                )
-
-    logger.info(
-        f"Successfully fetched {len(drivers_with_details)} drivers with details"
-    )
+    logger.info(f"Successfully processed {len(processed_drivers)} drivers")
 
     return {
-        "drivers": drivers_with_details,
+        "drivers": processed_drivers,
         "page": page,
-        "has_more": len(premium_drivers) == config.DRIVERS_PER_FETCH,
-        "total_fetched": len(drivers_with_details),
+        "has_more": len(drivers_data) == config.DRIVERS_PER_FETCH,
+        "total_fetched": len(processed_drivers),
     }
 
 
-def fetch_driver_details(premium_driver: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Fetch and process driver details"""
-    driver_id = premium_driver.get("id")
-    if not driver_id:
-        return None
-
-    details = api_client.get_driver_details(driver_id)
-    if not details:
-        return None
-
-    return process_driver_data(premium_driver, details, driver_id)
-
-
-def process_driver_data(premium_driver: Dict, details: Dict, driver_id: str) -> Dict:
-    """Process and combine driver data"""
-    # Get profile image
-    profile_image = None
-    photos = premium_driver.get("photos", [])
-    if photos and isinstance(photos, list) and len(photos) > 0:
-        photo = photos[0]
-        if isinstance(photo, dict) and "full" in photo:
-            profile_image = photo["full"].get("url")
-
+def process_driver_data(driver_data: Dict) -> Dict:
+    """Process and format driver data from the new API response"""
     # Process vehicles
     vehicles = []
-    for vehicle in premium_driver.get("verifiedVehicles", []):
-        # Get vehicle image
-        image_url = None
-        if vehicle.get("images"):
-            try:
-                first_image = vehicle["images"][0]
-                if isinstance(first_image, dict) and "full" in first_image:
-                    image_url = first_image["full"].get("url")
-            except:
-                pass
-
+    for vehicle in driver_data.get("verifiedVehicles", []):
         vehicle_info = {
             "model": vehicle.get("model", "Unknown"),
-            "type": vehicle.get("vehicleType")
-            or vehicle.get("vehicle_type", "Unknown"),
+            "type": vehicle.get("vehicleType", "Unknown"),
             "reg_no": vehicle.get("reg_no", ""),
-            "per_km_cost": float(vehicle.get("perKmCost", 0))
-            if vehicle.get("perKmCost")
-            else 0.0,
+            "per_km_cost": float(vehicle.get("perKmCost", 0)),
             "is_commercial": vehicle.get("is_commercial", False),
-            "image_url": image_url,
+            "image_url": vehicle.get("imageUrl"),
         }
         vehicles.append(vehicle_info)
 
     # Combine data
     return {
-        "id": driver_id,
-        "name": premium_driver.get("name", "Unknown"),
-        "city": premium_driver.get("city", ""),
-        "phone": premium_driver.get("phoneNo", ""),
-        "username": premium_driver.get("userName", ""),
-        "profile_image": profile_image,
-        "age": details.get("age"),
-        "experience": details.get("experience", 0),
-        "bio": details.get("driverBio", ""),
-        "connections": details.get("connections", 0),
-        "is_pet_allowed": details.get("isPetAllowed", False),
-        "is_married": details.get("married", False),
-        "languages": details.get("languages", []),
-        "trip_types": details.get("tripTypes", []),
-        "routes": [
-            {"from": r.get("from", ""), "to": r.get("to", "")}
-            for r in details.get("routes", [])
-        ],
+        "id": driver_data.get("id"),
+        "name": driver_data.get("name", "Unknown"),
+        "city": driver_data.get("city", ""),
+        "phone": driver_data.get("phoneNo", ""),
+        "username": driver_data.get("userName", ""),
+        "profile_image": driver_data.get("profileImage"),
+        "age": driver_data.get("age"),
+        "experience": driver_data.get("experience", 0),
+        "bio": driver_data.get("driverBio", ""),
+        "connections": driver_data.get("connections", 0),
+        "is_pet_allowed": driver_data.get("isPetAllowed", False),
+        "is_married": driver_data.get("married", False),
+        "languages": [lang for lang in driver_data.get("verifiedLanguages", []) if lang],
+        "trip_types": driver_data.get("tripTypes", []),
+        "routes": driver_data.get("routes", []),
         "verified_languages": [
-            {"name": l.get("name", ""), "verified": l.get("verified", False)}
-            for l in details.get("verifiedLanguages", [])
+            {"name": lang, "verified": True}
+            for lang in driver_data.get("verifiedLanguages", []) if lang
         ],
         "vehicles": vehicles,
     }
-
-
-# langgraph_agent/tools/drivers_tools.py
 
 
 @tool
@@ -177,93 +111,9 @@ def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
         passes_all_filters = True
 
         for filter_key, filter_value in filters.items():
-            if filter_key == "age" and isinstance(filter_value, dict):
-                operator = filter_value.get("operator", ">=")
-                value = filter_value.get("value")
-                if value is not None:
-                    driver_age = driver.get("age")
-                    if driver_age is None or not compare_values(
-                        driver_age, operator, value
-                    ):
-                        passes_all_filters = False
-                        break
-
-            elif filter_key == "experience" and isinstance(filter_value, dict):
-                operator = filter_value.get("operator", ">=")
-                value = filter_value.get("value")
-                if value is not None:
-                    driver_exp = driver.get("experience", 0)
-                    if not compare_values(driver_exp, operator, value):
-                        passes_all_filters = False
-                        break
-
-            elif filter_key == "language" and isinstance(filter_value, str):
-                target_lang = filter_value.lower()
-                languages = driver.get("languages", [])
-                # Check both languages array and verified_languages
-                has_language = any(lang.lower() == target_lang for lang in languages)
-
-                if not has_language:
-                    verified_langs = driver.get("verified_languages", [])
-                    has_language = any(
-                        vl.get("name", "").lower() == target_lang
-                        for vl in verified_langs
-                        if isinstance(vl, dict)
-                    )
-
-                if not has_language:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "vehicle_type" and isinstance(filter_value, str):
-                target_type = filter_value.lower()
-                vehicles = driver.get("vehicles", [])
-                # Check for partial matches and common variations
-                if not any(
-                    target_type in v.get("type", "").lower()
-                    or v.get("type", "").lower() in target_type
-                    or (
-                        target_type == "sedan" and "sedan" in v.get("model", "").lower()
-                    )
-                    for v in vehicles
-                ):
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "is_married" and isinstance(filter_value, bool):
-                if driver.get("is_married") != filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "is_pet_allowed" and isinstance(filter_value, bool):
-                if driver.get("is_pet_allowed") != filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "min_connections" and isinstance(
-                filter_value, (int, float)
-            ):
-                if driver.get("connections", 0) < filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "min_experience" and isinstance(
-                filter_value, (int, float)
-            ):
-                if driver.get("experience", 0) < filter_value:
-                    passes_all_filters = False
-                    break
-
-            elif filter_key == "max_cost_per_km" and isinstance(
-                filter_value, (int, float)
-            ):
-                vehicles = driver.get("vehicles", [])
-                has_affordable = any(
-                    v.get("per_km_cost", float("inf")) <= filter_value for v in vehicles
-                )
-                if not has_affordable:
-                    passes_all_filters = False
-                    break
+            if not passes_filter(driver, filter_key, filter_value):
+                passes_all_filters = False
+                break
 
         if passes_all_filters:
             filtered_drivers.append(driver)
@@ -272,17 +122,60 @@ def filter_drivers(drivers: List[Dict], filters: Dict[str, Any]) -> List[Dict]:
     return filtered_drivers
 
 
-def compare_values(driver_value: float, operator: str, target_value: float) -> bool:
+def passes_filter(driver: Dict, key: str, value: Any) -> bool:
+    """Check if a single driver passes a given filter"""
+    if key == "age" and isinstance(value, dict):
+        driver_age = driver.get("age")
+        return driver_age is not None and compare_values(
+            driver_age, value.get("operator", ">="), value.get("value")
+        )
+
+    if key == "experience" and isinstance(value, dict):
+        driver_exp = driver.get("experience", 0)
+        return compare_values(
+            driver_exp, value.get("operator", ">="), value.get("value")
+        )
+
+    if key == "language" and isinstance(value, str):
+        target_lang = value.lower()
+        languages = driver.get("languages", [])
+        return any(lang.lower() == target_lang for lang in languages)
+
+    if key == "vehicle_type" and isinstance(value, str):
+        target_type = value.lower()
+        vehicles = driver.get("vehicles", [])
+        return any(
+            target_type in v.get("type", "").lower() for v in vehicles
+        )
+
+    if key in ["is_married", "is_pet_allowed"] and isinstance(value, bool):
+        return driver.get(key) == value
+
+    if key == "min_connections" and isinstance(value, (int, float)):
+        return driver.get("connections", 0) >= value
+
+    if key == "min_experience" and isinstance(value, (int, float)):
+        return driver.get("experience", 0) >= value
+
+    # Default to true if filter doesn't apply
+    return True
+
+
+def compare_values(
+    driver_value: Optional[float], operator: str, target_value: Optional[float]
+) -> bool:
     """Compare values based on operator"""
+    if driver_value is None or target_value is None:
+        return False
     if operator == ">":
         return driver_value > target_value
-    elif operator == "<":
+    if operator == "<":
         return driver_value < target_value
-    elif operator == ">=":
+    if operator == ">=":
         return driver_value >= target_value
-    elif operator == "<=":
+    if operator == "<=":
         return driver_value <= target_value
-    elif operator == "==":
+    if operator == "==":
         return driver_value == target_value
     return False
 
@@ -305,7 +198,7 @@ def show_more_drivers(current_index: int, total_drivers: int) -> Dict[str, Any]:
     return {
         "next_index": next_index,
         "has_more_in_current": has_more_in_current,
-        "should_fetch_new": not has_more_in_current and next_index >= total_drivers,
+        "should_fetch_new": not has_more_in_current,
     }
 
 
@@ -329,7 +222,7 @@ def remove_filters_from_search(keys_to_remove: List[str]) -> str:
 @tool
 def get_driver_details(driver_id: str) -> Optional[Dict]:
     """
-    Get detailed information for a specific driver.
+    Get detailed information for a specific driver by their ID.
 
     Args:
         driver_id: The unique ID of the driver
@@ -338,38 +231,13 @@ def get_driver_details(driver_id: str) -> Optional[Dict]:
         Dictionary with detailed driver information or None if not found
     """
     logger.info(f"Getting details for driver {driver_id}")
+    # The new API doesn't have a dedicated endpoint for single driver details.
+    # We can simulate it by fetching a list with a filter for the ID.
+    # This assumes the API supports filtering by 'id'.
+    drivers_data = api_client.get_drivers(city="", limit=1, filters={"id": driver_id})
 
-    details = api_client.get_driver_details(driver_id)
-
-    if not details:
+    if not drivers_data:
         logger.warning(f"No details found for driver {driver_id}")
         return None
 
-    # Format detailed information
-    driver_details = {
-        "id": driver_id,
-        "name": details.get("name", "Unknown"),
-        "age": details.get("age"),
-        "experience": details.get("experience", 0),
-        "bio": details.get("driverBio", ""),
-        "city": details.get("city", ""),
-        "phone": details.get("phoneNo", ""),
-        "username": details.get("userName", ""),
-        "connections": details.get("connections", 0),
-        "is_pet_allowed": details.get("isPetAllowed", False),
-        "is_married": details.get("married", False),
-        "languages": details.get("languages", []),
-        "verified_languages": details.get("verifiedLanguages", []),
-        "trip_types": details.get("tripTypes", []),
-        "routes": details.get("routes", []),
-        "training_content": details.get("trainingContent", []),
-        "vehicle_ownership": details.get("vehicleOwnershipDetails", []),
-        "verified_vehicles": details.get("verifiedVehicles", []),
-        "profile_pic": details.get("profilePic", ""),
-        "membership_active": details.get("membershipActive", False),
-        "aadhar_verified": details.get("aadharCardVerified", False),
-        "license_verified": details.get("drivingLicenseVerified", False),
-    }
-
-    logger.info(f"Got detailed info for {driver_details['name']}")
-    return driver_details
+    return process_driver_data(drivers_data[0])

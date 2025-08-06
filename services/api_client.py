@@ -1,7 +1,6 @@
 # services/api_client.py
 """Simple API client for driver endpoints"""
 
-import time
 import requests
 from typing import List, Dict, Any, Optional
 import logging
@@ -11,51 +10,35 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def get_premium_drivers(
-    city: str, page: int = 1, limit: int = config.DRIVERS_PER_FETCH
+def get_drivers(
+    city: str,
+    page: int = 1,
+    limit: int = config.DRIVERS_PER_FETCH,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Get premium drivers from API"""
+    """Get drivers from the new single API endpoint"""
     try:
-        data = {
+        params = {
             "city": city,
             "page": page,
             "limit": limit,
-            "timestamp": int(time.time()),
         }
+        if filters:
+            params.update(filters)
 
-        response = requests.post(config.GET_DRIVERS_URL, data=data, timeout=15)
+        response = requests.get(config.GET_PREMIUM_DRIVERS_URL, params=params, timeout=20)
 
         if response.status_code != 200:
-            logger.error(f"API error: {response.status_code}")
+            logger.error(f"API error: {response.status_code} - {response.text}")
             return []
 
         result = response.json()
         if not result.get("success", False):
+            logger.warning(f"API returned success=false for city {city}")
             return []
 
         return result.get("data", [])
 
     except Exception as e:
-        logger.error(f"Error getting drivers: {e}")
+        logger.error(f"Error getting drivers from new API: {e}")
         return []
-
-
-def get_driver_details(driver_id: str) -> Optional[Dict[str, Any]]:
-    """Get driver details from API"""
-    try:
-        data = {"partnerId": driver_id, "timestamp": int(time.time())}
-
-        response = requests.post(config.GET_PARTNER_DATA_URL, data=data, timeout=10)
-
-        if response.status_code != 200:
-            return None
-
-        result = response.json()
-        if not result.get("success", False):
-            return None
-
-        return result.get("data", {})
-
-    except Exception as e:
-        logger.error(f"Error getting driver details: {e}")
-        return None

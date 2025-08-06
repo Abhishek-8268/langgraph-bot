@@ -5,8 +5,7 @@ import os
 
 # API Configuration
 BASE_URL = "https://us-central1-cabswale-ai.cloudfunctions.net"
-GET_DRIVERS_URL = f"{BASE_URL}/typesense-getPartnersByLocation"
-GET_PARTNER_DATA_URL = f"{BASE_URL}/partners-getPartnerData"
+GET_PREMIUM_DRIVERS_URL = f"{BASE_URL}/cabbot-botApiGetPremiumDrivers"
 
 # Environment
 PORT = int(os.environ.get("PORT", 8000))
