@@ -105,6 +105,7 @@ Driver Name: [name]
 • Car type: [vehicle_type]
 • Profile Url: https://cabswale.ai/profile/{userName}
 • Driver_Id: [Driver_Id] (show the driver id from the data)
+• profile_image: [driver_image] (here you have to show the driver image from the photos then the url that is present in the mob)
 
 **CRITICAL:** Only use actual userNames returned by the function - NEVER generate fake URLs
 </mandatory_driver_display_format>
