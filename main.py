@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Import your existing agent
 from langgraph_agent.graph.builder import app as cab_agent
-    
+
 # Simple setup
 app = FastAPI(title="Cab Booking Bot")
 slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
@@ -180,24 +180,6 @@ def process_message(user_id: str, message: str) -> str:
         import traceback
         traceback.print_exc()
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
-
-# --- New API Endpoint for App Integration ---
-@app.post("/chat")
-async def chat_with_bot(chat_request: ChatRequest):
-    """
-    Handles a chat message from a user and returns the bot's response.
-    Maintains conversation context using user_id.
-    """
-    response = process_message(chat_request.user_id, chat_request.message)
-    
-    # Determine the tag
-    if "Driver Name:" in response and "• City:" in response:
-        type = "driverList"
-    else:
-         type = "text"
-        
-    return {"response": response, "type": type}
-
 
 @app.post("/slack/events")
 async def handle_slack_events(request: Request):
