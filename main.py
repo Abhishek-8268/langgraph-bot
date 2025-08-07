@@ -1,4 +1,5 @@
 import os
+import re
 from fastapi import FastAPI, Request
 from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
@@ -166,6 +167,44 @@ def process_message(user_id: str, message: str) -> str:
         traceback.print_exc()
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
 
+def parse_driver_string(response_str: str):
+    """Parses the string representation of drivers into a structured dictionary."""
+    drivers = []
+    # Split the response by double newlines to separate driver blocks and the suggestion text
+    blocks = response_str.strip().split('\n\n')
+    
+    suggestion = ""
+    driver_blocks = []
+
+    # Separate driver blocks from the suggestion text
+    for block in blocks:
+        if "Driver Name:" in block:
+            driver_blocks.append(block)
+        else:
+            suggestion = block.strip()
+
+    for block in driver_blocks:
+        driver = {}
+        lines = block.strip().split('\n')
+        
+        # First line is always "Driver Name: ..."
+        try:
+            driver['name'] = lines[0].replace('Driver Name:', '').strip()
+        except IndexError:
+            continue # Skip empty blocks
+            
+        # Other lines are "• Key: Value"
+        for line in lines[1:]:
+            line = line.replace('•', '').strip()
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip().lower().replace(' ', '_').replace('per_km', 'price_per_km')
+                driver[key] = value.strip()
+        drivers.append(driver)
+        
+    return {"drivers": drivers, "suggestion": suggestion}
+
+
 # --- New API Endpoint for App Integration ---
 @app.post("/chat")
 async def chat_with_bot(chat_request: ChatRequest):
@@ -175,13 +214,11 @@ async def chat_with_bot(chat_request: ChatRequest):
     """
     response = process_message(chat_request.user_id, chat_request.message)
     
-    # Determine the tag
     if "Driver Name:" in response and "• City:" in response:
-        type = "driverList"
+        response_json = parse_driver_string(response)
+        return {"response": response_json, "type": "driverList"}
     else:
-         type = "text"
-        
-    return {"response": response, "type": type}
+        return {"response": response, "type": "text"}
 
 
 @app.post("/slack/events")
