@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Import your existing agent
 from langgraph_agent.graph.builder import app as cab_agent
-
+    
 # Simple setup
 app = FastAPI(title="Cab Booking Bot")
 slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
