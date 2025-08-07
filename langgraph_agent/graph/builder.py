@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Tools list
 tools = [
     get_drivers_for_city,
-    filter_drivers,
     get_driver_details,
     remove_filters_from_search,
     show_more_drivers,
@@ -85,18 +84,16 @@ def agent_node(state: dict) -> dict:
 
 
 def tool_executor_node(state: dict) -> dict:
-    """Execute tools requested by the agent"""
+    """Execute tools requested by the agent, now with API-side filtering."""
     logger.info("---TOOL EXECUTOR NODE---")
 
     tool_calls = state.get("tool_calls", [])
     if not tool_calls:
+        logger.warning("Tool executor called but no tool_calls in state.")
         return state
 
-    # Map tool names to functions
     tool_map = {tool.name: tool for tool in tools}
     tool_messages = []
-
-    # Current state copy for updates
     state_updates = dict(state)
 
     for tool_call in tool_calls:
@@ -104,106 +101,65 @@ def tool_executor_node(state: dict) -> dict:
         tool_args = tool_call.get("args", {})
         tool_id = tool_call.get("id")
 
-        logger.info(f"Executing tool: {tool_name}")
+        logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
 
         tool_to_call = tool_map.get(tool_name)
         if not tool_to_call:
+            error_msg = f"Error: Tool '{tool_name}' not found."
+            logger.error(error_msg)
             tool_messages.append(
-                ToolMessage(
-                    content=f"Error: Tool '{tool_name}' not found.",
-                    tool_call_id=tool_id,
-                    name=tool_name,
-                )
+                ToolMessage(content=error_msg, tool_call_id=tool_id, name=tool_name)
             )
             continue
 
         try:
-            # Execute tool
+            # Add context from state to tool arguments if needed
             if tool_name == "get_driver_details":
                 tool_args["drivers"] = state_updates.get("all_fetched_drivers", [])
-                output = tool_to_call.invoke(tool_args)
-            else:
-                output = tool_to_call.invoke(tool_args)
 
+            # ***MODIFICATION: Pass filters directly to the get_drivers_for_city tool***
+            if tool_name == "get_drivers_for_city":
+                # Combine new filters from the LLM with any existing filters in the state
+                current_filters = state_updates.get("applied_filters", {})
+                new_filters = tool_args.get("filters", {})
+                current_filters.update(new_filters)
+                tool_args["filters"] = current_filters
+                state_updates["applied_filters"] = current_filters # Persist combined filters
+                state_updates["pickup_location"] = tool_args.get("city")
 
-            # Update state based on tool
+            # Execute the tool
+            output = tool_to_call.invoke(tool_args)
+
+            # Update state based on the tool's output
             if tool_name == "get_drivers_for_city":
                 new_drivers = output.get("drivers", [])
-
-                # Add to all fetched drivers
-                all_drivers = state_updates.get("all_fetched_drivers", [])
-                all_drivers.extend(new_drivers)
-
-                state_updates["all_fetched_drivers"] = all_drivers
-                state_updates["drivers_with_full_details"] = all_drivers
-                state_updates["filtered_drivers"] = all_drivers
-                state_updates["applied_filters"] = {}
-                state_updates["pickup_location"] = tool_args.get("city")
-                state_updates["current_display_index"] = 0
-                state_updates["current_page"] = output.get("page", 1)
-                state_updates["fetch_count"] = state_updates.get("fetch_count", 0) + 1
-
-                logger.info(
-                    f"Fetched {len(new_drivers)} drivers, total: {len(all_drivers)}"
-                )
-
-            elif tool_name == "filter_drivers":
-                drivers_to_filter = state_updates.get("all_fetched_drivers", [])
-                new_filters = tool_args.get("filters", {})
-
-                # FIX: Accumulate filters by updating the existing ones
-                combined_filters = state_updates.get("applied_filters", {}).copy()
-                combined_filters.update(new_filters)
-
-                logger.info(
-                    f"Filtering {len(drivers_to_filter)} drivers with filters: {combined_filters}"
-                )
-
-                from langgraph_agent.tools.drivers_tools import filter_drivers as filter_func
-                filtered_result = filter_func.invoke(
-                    {"drivers": drivers_to_filter, "filters": combined_filters}
-                )
-
-                fetch_count = state_updates.get("fetch_count", 0)
-                total_drivers = len(drivers_to_filter)
-
-                if (
-                    len(filtered_result) < config.DRIVERS_PER_DISPLAY
-                    and fetch_count < config.MAX_FETCH_DEPTH
-                ):
-                    current_page = state_updates.get("current_page", 1)
-
-                    state_updates["filtered_drivers"] = filtered_result
-                    state_updates["applied_filters"] = combined_filters
-                    state_updates["need_more_fetch"] = True
-                    state_updates["need_more_for_filter"] = True
-
-                    output = {
-                        "current_matches": len(filtered_result),
-                        "need_more_fetch": True,
-                        "next_page": current_page + 1,
-                        "total_checked": total_drivers,
-                    }
-                else:
-                    state_updates["filtered_drivers"] = filtered_result
-                    state_updates["applied_filters"] = combined_filters
+                
+                # If it's a new search (page 1), reset the driver list
+                if tool_args.get("page", 1) == 1:
+                    state_updates["all_fetched_drivers"] = new_drivers
                     state_updates["current_display_index"] = 0
-                    output = filtered_result
-
+                    state_updates["fetch_count"] = 1
+                else: # Append drivers for pagination
+                    all_drivers = state_updates.get("all_fetched_drivers", [])
+                    all_drivers.extend(new_drivers)
+                    state_updates["all_fetched_drivers"] = all_drivers
+                    state_updates["fetch_count"] = state_updates.get("fetch_count", 0) + 1
+                
+                # The filtered list is now the same as the fetched list
+                state_updates["filtered_drivers"] = state_updates["all_fetched_drivers"]
+                state_updates["current_page"] = output.get("page", 1)
+                
                 logger.info(
-                    f"Applied filters: {combined_filters}, found {len(filtered_result)} drivers"
+                    f"Fetched {len(new_drivers)} drivers, total now: {len(state_updates['all_fetched_drivers'])}"
                 )
 
             elif tool_name == "show_more_drivers":
                 info = output
                 state_updates["current_display_index"] = info.get("next_index", 0)
-
-                if info.get("should_fetch_new", False):
+                if info.get("should_fetch_new"):
                     current_page = state_updates.get("current_page", 1)
-                    fetch_count = state_updates.get("fetch_count", 0)
-
-                    if fetch_count < config.MAX_FETCH_DEPTH:
-                        output = {
+                    if state_updates.get("fetch_count", 0) < config.MAX_FETCH_DEPTH:
+                         output = {
                             "message": "need_more_drivers",
                             "next_page": current_page + 1,
                         }
@@ -214,39 +170,35 @@ def tool_executor_node(state: dict) -> dict:
 
                 if "all" in keys_to_remove:
                     state_updates["applied_filters"] = {}
-                    state_updates["filtered_drivers"] = state_updates.get(
-                        "all_fetched_drivers", []
-                    )
                 else:
                     for key in keys_to_remove:
                         current_filters.pop(key, None)
                     state_updates["applied_filters"] = current_filters
 
-                    if current_filters:
-                        all_drivers = state_updates.get("all_fetched_drivers", [])
-                        filtered = filter_drivers.invoke(
-                            {"drivers": all_drivers, "filters": current_filters}
-                        )
-                        state_updates["filtered_drivers"] = filtered
-                    else:
-                        state_updates["filtered_drivers"] = state_updates.get(
-                            "all_fetched_drivers", []
-                        )
+                # After removing filters, we need to signal a new search
+                output = {"message": "Filters removed. Please search again to see updated results."}
+                state_updates["all_fetched_drivers"] = []
+                state_updates["filtered_drivers"] = []
                 state_updates["current_display_index"] = 0
+                state_updates["fetch_count"] = 0
 
+            # Format the output for the LLM and create a ToolMessage
             output_str = format_tool_output(tool_name, output, state_updates)
             tool_messages.append(
                 ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name)
             )
 
         except Exception as e:
-            logger.error(f"Error executing {tool_name}: {e}")
+            logger.error(f"Error executing tool {tool_name}: {e}", exc_info=True)
             tool_messages.append(
                 ToolMessage(
-                    content=f"Error: {str(e)}", tool_call_id=tool_id, name=tool_name
+                    content=f"Error: An unexpected error occurred while running the tool '{tool_name}'.",
+                    tool_call_id=tool_id,
+                    name=tool_name,
                 )
             )
 
+    # Update the chat history and clear the tool calls for the next cycle
     state_updates["chat_history"] = state.get("chat_history", []) + tool_messages
     state_updates["tool_calls"] = []
 

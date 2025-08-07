@@ -12,20 +12,21 @@ logger = logging.getLogger(__name__)
 
 
 @tool
-def get_drivers_for_city(city: str, page: int = 1) -> Dict[str, Any]:
+def get_drivers_for_city(city: str, page: int = 1, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Get drivers for a specific city with full details using the new API.
+    Get drivers for a specific city with optional filters.
 
     Args:
-        city: The city name to search for drivers
-        page: Page number for pagination (default: 1)
+        city: The city name to search for drivers.
+        page: Page number for pagination (default: 1).
+        filters: (Optional) Dictionary of filter criteria to apply.
 
     Returns:
-        Dictionary containing drivers and pagination info
+        Dictionary containing drivers and pagination info.
     """
-    logger.info(f"Getting drivers for {city} (page {page}) using new API")
+    logger.info(f"Getting drivers for {city} (page {page}) with filters: {filters}")
 
-    drivers_data = api_client.get_drivers(city, page, config.DRIVERS_PER_FETCH)
+    drivers_data = api_client.get_drivers(city, page, config.DRIVERS_PER_FETCH, filters)
 
     if not drivers_data:
         logger.info(f"No drivers found in {city}")
