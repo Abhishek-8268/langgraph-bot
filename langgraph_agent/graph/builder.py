@@ -345,6 +345,7 @@ def format_drivers_list(drivers: List[Dict]) -> List[Dict]:
                 "is_married": driver.get("is_married"),
                 "city": driver.get("city"),
                 "vehicle": vehicle,
+                "lastAccess": driver.get("lastAccess"),
                 # Include all vehicles for image requests
                 "vehicles": driver.get("vehicles", []),
             }

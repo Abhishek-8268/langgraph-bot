@@ -86,6 +86,7 @@ def process_driver_data(driver_data: Dict) -> Dict:
             for lang in driver_data.get("verifiedLanguages", []) if lang
         ],
         "vehicles": vehicles,
+        "lastAccess": driver_data.get("lastAccess"),
     }
 
 
