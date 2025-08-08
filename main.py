@@ -1,4 +1,5 @@
 import os
+import re  # Added import for completeness
 from fastapi import FastAPI, Request
 from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
@@ -11,18 +12,20 @@ from langgraph_agent.graph.builder import app as cab_agent
 # Simple setup
 app = FastAPI(title="Cab Booking Bot")
 slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+
 app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:3000", "https://cabswale.ai"], # Replace with your allowed origins
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
-        allow_headers=["*"], # Or specific headers
-    )
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://www.cabswale.ai"], # Replace with your allowed origins
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
+    allow_headers=["*"], # Or specific headers
+)
+
 # Simple in-memory storage (for demo - use Redis/DB in production)
 user_conversations = {}
 processed_messages = set()  # Track processed messages to avoid duplicates
 
-# --- New Pydantic model for the /chat endpoint ---
+# --- Pydantic model for the /chat endpoint ---
 class ChatRequest(BaseModel):
     user_id: str
     message: str
@@ -40,23 +43,6 @@ def get_user_state(user_id: str) -> dict:
             "tool_calls": []
         }
     return user_conversations[user_id]
-
-# --- New API Endpoint for App Integration ---
-@app.post("/chat")
-async def chat_with_bot(chat_request: ChatRequest):
-    """
-    Handles a chat message from a user and returns the bot's response.
-    Maintains conversation context using user_id.
-    """
-    response = process_message(chat_request.user_id, chat_request.message)
-    
-    # Determine the tag
-    if "Driver Name:" in response and "• City:" in response:
-        type = "driverList"
-    else:
-         type = "text"
-        
-    return {"response": response, "type": type}
 
 def is_duplicate_message(event: dict) -> bool:
     """Check if this event was already processed using multiple identifiers"""
@@ -181,6 +167,65 @@ def process_message(user_id: str, message: str) -> str:
         traceback.print_exc()
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
 
+# <<< START OF CHANGES >>>
+
+def parse_driver_string(response_str: str):
+    """Parses the string representation of drivers into a structured dictionary."""
+    drivers = []
+    # Split the response by double newlines to separate driver blocks and the suggestion text
+    blocks = response_str.strip().split('\n\n')
+    
+    suggestion = ""
+    driver_blocks = []
+
+    # Separate driver blocks from the suggestion text
+    for block in blocks:
+        if "Driver Name:" in block:
+            driver_blocks.append(block)
+        else:
+            suggestion = block.strip()
+
+    for block in driver_blocks:
+        driver = {}
+        lines = block.strip().split('\n')
+        
+        # First line is always "Driver Name: ..."
+        try:
+            driver['name'] = lines[0].replace('Driver Name:', '').strip()
+        except IndexError:
+            continue # Skip empty blocks
+            
+        # Other lines are "• Key: Value"
+        for line in lines[1:]:
+            line = line.replace('•', '').strip()
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip().lower().replace(' ', '_').replace('per_km', 'price_per_km')
+                driver[key] = value.strip()
+        drivers.append(driver)
+        
+    return {"drivers": drivers, "suggestion": suggestion}
+
+
+# --- API Endpoint for App Integration (Restored to previous version) ---
+@app.post("/chat")
+async def chat_with_bot(chat_request: ChatRequest):
+    """
+    Handles a chat message from a user and returns the bot's response.
+    Maintains conversation context using user_id.
+    """
+    response = process_message(chat_request.user_id, chat_request.message)
+    
+    # Check if the response contains driver details to parse it
+    if "Driver Name:" in response and "• City:" in response:
+        response_json = parse_driver_string(response)
+        return {"response": response_json, "type": "driverList"}
+    else:
+        # Otherwise, return the plain text response
+        return {"response": response, "type": "text"}
+
+# <<< END OF CHANGES >>>
+
 @app.post("/slack/events")
 async def handle_slack_events(request: Request):
     """Handle Slack events - FIXED for multi-user access"""
@@ -215,13 +260,13 @@ async def handle_slack_events(request: Request):
         if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
             try:
                 # Try to send acknowledgment
-               slack_client.chat_postMessage(
-               channel=channel,
-               text=f"🚗 Thinking...",
-               as_user=False,
-               username="Cab Bot"
-               )
-               print("📤 Sent immediate acknowledgment")
+                slack_client.chat_postMessage(
+                channel=channel,
+                text=f"🚗 Thinking...",
+                as_user=False,
+                username="Cab Bot"
+                )
+                print("📤 Sent immediate acknowledgment")
             except Exception as ack_error:
                 print(f"⚠️ Failed to send acknowledgment: {ack_error}")
                 # Don't fail the whole process if acknowledgment fails
@@ -285,6 +330,7 @@ async def handle_slack_events(request: Request):
 
     return {"status": "ok"}
 
+
 @app.post("/slack/commands")
 async def handle_slash_commands(request: Request):
     """Handle /cab slash command"""
@@ -298,6 +344,7 @@ async def handle_slash_commands(request: Request):
         response = process_message(user_id, text)
 
     return {"text": f"🚗 {response}"}
+
 
 @app.get("/test_agent/{message}")
 async def test_agent_directly(message: str):
@@ -319,6 +366,7 @@ async def test_agent_directly(message: str):
     except Exception as e:
         return {"error": str(e)}
 
+
 @app.get("/debug/{user_id}")
 async def debug_user(user_id: str):
     """Debug user state"""
@@ -334,6 +382,7 @@ async def debug_user(user_id: str):
         }
     return {"error": "User not found"}
 
+
 @app.get("/clear_cache")
 async def clear_cache():
     """Clear message cache and user states (for debugging)"""
@@ -341,6 +390,7 @@ async def clear_cache():
     processed_messages.clear()
     user_conversations.clear()
     return {"status": "Cache cleared"}
+
 
 @app.get("/")
 async def home():
@@ -361,10 +411,12 @@ async def home():
         }
     }
 
+
 @app.get("/health")
 async def health():
     """Health check"""
     return {"status": "healthy"}
+
 
 if __name__ == "__main__":
     import uvicorn
