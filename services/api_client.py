@@ -5,6 +5,7 @@ import requests
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime, timezone
+import json
 
 import config
 
@@ -85,4 +86,48 @@ def create_trip(
 
     except Exception as e:
         logger.error(f"Error calling create_trip API: {e}")
+        return None
+
+
+def send_availability_request(
+    trip_id: str, driver_ids: List[str], trip_details: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Sends an availability request to the specified drivers for a given trip."""
+    try:
+        payload = {
+            "driverIds": [  "pv258iLSjtfyBHyLgRjQcShJDt92",
+                            "NewcOnEO5DdiDkhKwc8LjGapICB3",
+                            "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2"],
+            "data": {
+                "trip_details": trip_details,
+                "customerDetails": {
+                    "name": "Ajay Upadhyay",
+                    "id": "mXghqeK6O9TueSASXObqFkggX8l1",
+                    "phoneNo": "+917470468734",
+                    "profile_image": "https://example.com/image.jpg",
+                },
+                "message": "Please confirm your availability for this trip.",
+            },
+            "tripId": trip_id,
+        }
+
+        # Detailed logging of the payload
+        logger.info(f"Sending availability request. Trip ID: {trip_id}")
+        logger.info(f"Payload for availability request: {json.dumps(payload, indent=2)}")
+
+        response = requests.post(
+            config.SEND_AVAILABILITY_REQUEST_URL, json=payload, timeout=20
+        )
+
+        if response.status_code not in [200, 201]:
+            logger.error(
+                f"API error sending availability request: {response.status_code} - {response.text}"
+            )
+            return None
+        
+        logger.info(f"Availability request sent successfully for Trip ID: {trip_id}")
+        return response.json()
+
+    except Exception as e:
+        logger.error(f"Error sending availability request: {e}")
         return None

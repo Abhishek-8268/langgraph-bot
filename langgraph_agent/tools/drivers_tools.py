@@ -254,6 +254,46 @@ def get_driver_details(driver_id: str, drivers: List[Dict] = []) -> Optional[Dic
     return process_driver_data(drivers_data[0])
 
 
+@tool
+def check_driver_availability(
+    driver_ids: List[str],
+    trip_id: str,
+    pickup_location: str,
+    drop_location: str,
+    trip_type: str,
+) -> Dict[str, Any]:
+    """
+    Checks the availability of a list of drivers for the current trip.
+
+    Args:
+        driver_ids: A list of driver IDs to check for availability.
+        trip_id: The ID of the current trip.
+        pickup_location: The pickup city for the trip.
+        drop_location: The drop-off city for the trip.
+        trip_type: The type of trip (e.g., 'one-way').
+
+    Returns:
+        A dictionary with the result of the availability check.
+    """
+    if not all([trip_id, pickup_location, drop_location, trip_type]):
+        return {"status": "error", "message": "Missing one or more required trip details."}
+
+    trip_details = {
+        "from": pickup_location,
+        "to": drop_location,
+        "trip_time": datetime.now(timezone.utc).strftime("%I:%M %p"),
+        "trip_date": datetime.now(timezone.utc).strftime("%d/%m/%y"),
+        "trip_type": trip_type,
+    }
+
+    response = api_client.send_availability_request(
+        trip_id, driver_ids, trip_details
+    )
+
+    if not response:
+        return {"status": "error", "message": "Failed to send the availability request due to an API error."}
+
+    return {"status": "success", "message": "Availability requests have been sent to the drivers. You will be notified shortly."}
 
 @tool
 def create_trip(

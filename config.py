@@ -7,6 +7,8 @@ import os
 BASE_URL = "https://us-central1-cabswale-ai.cloudfunctions.net"
 GET_PREMIUM_DRIVERS_URL = f"{BASE_URL}/cabbot-botApiGetPremiumDrivers"
 CREATE_TRIP_URL = "https://cabbot-botcreatetrip-x7ozexvczq-uc.a.run.app"
+SEND_AVAILABILITY_REQUEST_URL = "https://us-central1-cabswale-ai.cloudfunctions.net/cabbot-botSendAvilabilityRequestToDrivers"
+
 
 # Environment
 PORT = int(os.environ.get("PORT", 8000))

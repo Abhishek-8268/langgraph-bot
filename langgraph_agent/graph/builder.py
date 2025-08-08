@@ -17,6 +17,7 @@ from langgraph_agent.tools.drivers_tools import (
     remove_filters_from_search,
     show_more_drivers,
     create_trip,
+    check_driver_availability,
 )
 import config
 
@@ -29,6 +30,7 @@ tools = [
     remove_filters_from_search,
     show_more_drivers,
     create_trip,
+    check_driver_availability,
 ]
 
 # Initialize LLM
@@ -118,6 +120,12 @@ def tool_executor_node(state: dict) -> dict:
             # Add context from state to tool arguments if needed
             if tool_name == "get_driver_details":
                 tool_args["drivers"] = state_updates.get("all_fetched_drivers", [])
+
+            if tool_name == "check_driver_availability":
+                tool_args["trip_id"] = state_updates.get("trip_id")
+                tool_args["pickup_location"] = state_updates.get("pickup_location")
+                tool_args["drop_location"] = state_updates.get("drop_location")
+                tool_args["trip_type"] = state_updates.get("trip_type")
 
             # ***MODIFICATION: Pass filters directly to the get_drivers_for_city tool***
             if tool_name == "get_drivers_for_city":

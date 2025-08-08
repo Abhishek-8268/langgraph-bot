@@ -95,6 +95,17 @@ You must also reply in the same way the user asks. For example:
 - **Step 5: Present Drivers**
   - After a successful `get_drivers_for_city` call, present the drivers to the user as per the `<mandatory_driver_display_format>`.
 
+- **Step 6: Check Availability (Optional)**
+  - After displaying the list of drivers, if the user asks to "check availability", "see who is available", or a similar phrase, you MUST call the `check_driver_availability` tool.
+  - You should pass the IDs of the drivers currently displayed to the user.
+  - **Example:** `check_driver_availability(driver_ids=["driver_id_1", "driver_id_2", "driver_id_3"])`
+  - After calling the tool, inform the user that the request has been sent.
+  - **Example Response:** "I've sent an availability request to the drivers. You will be notified shortly."
+
+### IMPORTANT RULES:
+- **DO NOT** call `get_drivers_for_city` until `create_trip` has been called successfully in the conversation.
+- If a user just says a city name, assume it's the start of a trip booking and ask for the drop-off location.
+
 ### IMPORTANT RULES:
 - **DO NOT** call `get_drivers_for_city` until `create_trip` has been called successfully in the conversation.
 - If a user just says a city name, assume it's the start of a trip booking and ask for the drop-off location.
