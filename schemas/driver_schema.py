@@ -92,6 +92,10 @@ class CabBookingState(BaseModel):
     pickup_location: Optional[str] = None
     drop_location: Optional[str] = None
     passenger_count: Optional[int] = None
+    trip_type: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    trip_id: Optional[str] = None
 
     # State info
     last_bot_response: Optional[str] = None

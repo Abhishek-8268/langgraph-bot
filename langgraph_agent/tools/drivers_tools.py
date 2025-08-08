@@ -4,6 +4,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from langchain_core.tools import tool
+from datetime import datetime, timezone
 
 from services import api_client
 import config
@@ -251,3 +252,61 @@ def get_driver_details(driver_id: str, drivers: List[Dict] = []) -> Optional[Dic
         return None
 
     return process_driver_data(drivers_data[0])
+
+
+
+@tool
+def create_trip(
+    pickup_city: str,
+    drop_city: str,
+    trip_type: str,
+    return_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Creates a trip with the given details. This MUST be called before searching for drivers.
+
+    Args:
+        pickup_city: The city from where the trip starts.
+        drop_city: The city where the trip ends.
+        trip_type: The type of trip, must be either 'one-way' or 'round-trip'.
+        return_date: (Optional) The return date for a round-trip, in YYYY-MM-DD format.
+
+    Returns:
+        A dictionary with the trip creation status.
+    """
+    logger.info(
+        f"Creating trip from {pickup_city} to {drop_city} ({trip_type})"
+    )
+    # Format dates to match the API's expected format (e.g., 2025-08-07T09:00:00.000Z)
+    start_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    
+    end_date = None
+    if trip_type.lower() == "round-trip":
+        if not return_date:
+            return {"status": "error", "message": "Return date is required for a round-trip."}
+        try:
+            # Parse the date and set a predefined time of 12:00:00 in UTC
+            end_date_dt = datetime.strptime(return_date, "%Y-%m-%d")
+            end_date_dt_utc = datetime(
+                end_date_dt.year, end_date_dt.month, end_date_dt.day, 12, 0, 0, tzinfo=timezone.utc
+            )
+            end_date = end_date_dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        except ValueError:
+            return {"status": "error", "message": "Invalid return date format. Please use YYYY-MM-DD."}
+    # For one-way trips, set a default end date (e.g., same as start date)
+    else:
+        end_date = start_date
+
+    trip_data = api_client.create_trip(
+        pickup_city, drop_city, trip_type.lower(), start_date, end_date
+    )
+
+    if not trip_data or "tripId" not in trip_data:
+        return {"status": "error", "message": "Failed to create the trip due to an API error."}
+
+    return {
+        "status": "success",
+        "message": "Trip created successfully.",
+        "tripId": trip_data.get("tripId"),
+        "pickup_city": pickup_city,
+    }

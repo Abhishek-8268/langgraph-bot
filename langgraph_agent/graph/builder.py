@@ -16,6 +16,7 @@ from langgraph_agent.tools.drivers_tools import (
     get_driver_details,
     remove_filters_from_search,
     show_more_drivers,
+    create_trip,
 )
 import config
 
@@ -27,10 +28,11 @@ tools = [
     get_driver_details,
     remove_filters_from_search,
     show_more_drivers,
+    create_trip,
 ]
 
 # Initialize LLM
-llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.1)
+llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.9)
 llm_with_tools = llm.bind_tools(tools)
 
 
@@ -131,9 +133,16 @@ def tool_executor_node(state: dict) -> dict:
             output = tool_to_call.invoke(tool_args)
 
             # Update state based on the tool's output
-            if tool_name == "get_drivers_for_city":
+            if tool_name == "create_trip":
+                if "error" not in output:
+                    state_updates["trip_id"] = output.get("tripId")
+                    state_updates["pickup_location"] = tool_args.get("pickup_city")
+                    state_updates["drop_location"] = tool_args.get("drop_city")
+                    state_updates["trip_type"] = tool_args.get("trip_type")
+                    output["message"] = f"Trip created successfully from {tool_args.get('pickup_city')} to {tool_args.get('drop_city')}. Now I will find drivers for you."
+            elif tool_name == "get_drivers_for_city":
                 new_drivers = output.get("drivers", [])
-                
+
                 # If it's a new search (page 1), reset the driver list
                 if tool_args.get("page", 1) == 1:
                     state_updates["all_fetched_drivers"] = new_drivers
@@ -144,11 +153,11 @@ def tool_executor_node(state: dict) -> dict:
                     all_drivers.extend(new_drivers)
                     state_updates["all_fetched_drivers"] = all_drivers
                     state_updates["fetch_count"] = state_updates.get("fetch_count", 0) + 1
-                
+
                 # The filtered list is now the same as the fetched list
                 state_updates["filtered_drivers"] = state_updates["all_fetched_drivers"]
                 state_updates["current_page"] = output.get("page", 1)
-                
+
                 logger.info(
                     f"Fetched {len(new_drivers)} drivers, total now: {len(state_updates['all_fetched_drivers'])}"
                 )
@@ -203,6 +212,7 @@ def tool_executor_node(state: dict) -> dict:
     state_updates["tool_calls"] = []
 
     return state_updates
+
 
 def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
     """Format tool output for LLM"""
@@ -283,7 +293,7 @@ def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
         }
 
         return json.dumps(summary, indent=2)
-        
+
     elif tool_name == "get_driver_details":
         if not output:
             return json.dumps({"error": "Driver not found"})

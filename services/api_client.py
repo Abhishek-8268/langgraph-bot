@@ -4,6 +4,7 @@
 import requests
 from typing import List, Dict, Any, Optional
 import logging
+from datetime import datetime, timezone
 
 import config
 
@@ -42,3 +43,46 @@ def get_drivers(
     except Exception as e:
         logger.error(f"Error getting drivers from new API: {e}")
         return []
+
+
+def create_trip(
+    pickup_city: str,
+    drop_city: str,
+    trip_type: str,
+    start_date: str,
+    end_date: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Create a trip using the new API endpoint with the updated payload."""
+    try:
+        payload = {
+            "customerId": "69",
+            "customerName": "tester",
+            "customerPhone": "69696696969696",
+            "customerProfileImage": "",
+            "pickUpLocation": {
+                "city": pickup_city,
+                "coordinates": "",
+                "placeName": "",
+            },
+            "dropLocation": {
+                "city": drop_city,
+                "coordinates": "",
+                "placeName": "",
+            },
+            "startDate": start_date,
+            "tripType": trip_type,
+        }
+        if end_date:
+            payload["endDate"] = end_date
+
+        response = requests.post(config.CREATE_TRIP_URL, json=payload, timeout=20)
+
+        if response.status_code not in [200, 201]:
+            logger.error(f"API error creating trip: {response.status_code} - {response.text}")
+            return None
+
+        return response.json()
+
+    except Exception as e:
+        logger.error(f"Error calling create_trip API: {e}")
+        return None
