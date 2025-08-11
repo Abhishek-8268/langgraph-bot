@@ -16,7 +16,7 @@ slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://www.cabswale.ai"], # Replace with your allowed origins
+    allow_origins=["http://localhost:3000", "https://www.cabswale.ai", "https:cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"], # Replace with your allowed origins
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
     allow_headers=["*"], # Or specific headers
@@ -103,7 +103,7 @@ def process_message(user_id: str, message: str, customer_details: dict = None) -
         # Clear the specific user's conversation
         if user_id in user_conversations:
             del user_conversations[user_id]
-        return "🔄 Reset! Tell me your pickup location to find drivers."
+        return "🔄 Reset! "
 
     # Add message to chat history
     state["chat_history"].append(HumanMessage(content=message))
