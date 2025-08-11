@@ -44,7 +44,7 @@ def agent_node(state: dict) -> dict:
     logger.info("---AGENT NODE---")
 
     # Get the current date to provide context to the LLM
-    current_date_str = datetime.now().strftime("%d-%m-%Y")
+    current_date_str = datetime.now().strftime("%Y-%m-%d")
     prompt_with_date = bot_prompt.format(current_date=current_date_str)
 
 
