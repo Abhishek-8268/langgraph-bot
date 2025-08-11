@@ -18,7 +18,7 @@ def get_drivers_for_city(city: str, page: int = 1, filters: Optional[Dict[str, A
     Get drivers for a specific city with optional filters.
 
     Args:
-        city: The city name to search for drivers.
+        city: The city name to search for drivers. This should be a valid Indian city.
         page: Page number for pagination (default: 1).
         filters: (Optional) Dictionary of filter criteria to apply.
 
@@ -307,8 +307,8 @@ def create_trip(
     Creates a trip with the given details. This MUST be called before searching for drivers.
 
     Args:
-        pickup_city: The city from where the trip starts.
-        drop_city: The city where the trip ends.
+        pickup_city: The city from where the trip starts. Should be a valid Indian city.
+        drop_city: The city where the trip ends. Should be a valid Indian city.
         trip_type: The type of trip, must be either 'one-way' or 'round-trip'.
         return_date: (Optional) The return date for a round-trip, in YYYY-MM-DD format.
 
