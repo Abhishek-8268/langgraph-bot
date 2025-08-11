@@ -1,60 +1,128 @@
 import os
-import re  # Added import for completeness
-from fastapi import FastAPI, Request
+import re
+import logging
+from fastapi import FastAPI, Request, HTTPException
 from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, Dict, Any, List
+import asyncio
+from datetime import datetime
 
 # Import your existing agent
 from langgraph_agent.graph.builder import app as cab_agent
+from schemas.driver_schema import DriverFilters, CabBookingState
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Simple setup
-app = FastAPI(title="Cab Booking Bot")
+app = FastAPI(
+    title="Enhanced Cab Booking Bot", 
+    version="2.0.0",
+    description="AI-powered cab booking assistant with comprehensive filtering capabilities"
+)
+
 slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://www.cabswale.ai", "https:cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"], # Replace with your allowed origins
+    allow_origins=[
+        "http://localhost:3000", 
+        "https://www.cabswale.ai", 
+        "https://cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
-    allow_headers=["*"], # Or specific headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
 
-# Simple in-memory storage (for demo - use Redis/DB in production)
-user_conversations = {}
-processed_messages = set()  # Track processed messages to avoid duplicates
+# Enhanced in-memory storage with type safety
+user_conversations: Dict[str, Dict[str, Any]] = {}
+processed_messages = set()
 
-# --- Pydantic model for the /chat endpoint ---
+# --- Enhanced Pydantic models ---
+class CustomerDetails(BaseModel):
+    """Customer details model"""
+    customer_id: Optional[str] = Field(None, alias="customerId")
+    customer_name: Optional[str] = Field(None, alias="customerName") 
+    customer_profile: Optional[str] = Field(None, alias="customerProfile")
+    customer_phone: Optional[str] = Field(None, alias="customerPhone", pattern=r'^\d{10}$')
+
+
 class ChatRequest(BaseModel):
-    user_id: str
-    message: str
-    customer_id: Optional[str] = None
-    customer_name: Optional[str] = None
-    customer_profile: Optional[str] = None
-    customer_phone: Optional[str] = None
+    """Enhanced chat request model"""
+    user_id: str = Field(..., min_length=1, description="Unique user identifier")
+    message: str = Field(..., min_length=1, description="User message content")
+    customer_id: Optional[str] = Field(None, alias="customerId")
+    customer_name: Optional[str] = Field(None, alias="customerName")
+    customer_profile: Optional[str] = Field(None, alias="customerProfile")  
+    customer_phone: Optional[str] = Field(None, alias="customerPhone")
+    
+    # Optional filter preferences for power users
+    filters: Optional[Dict[str, Any]] = Field(None, description="Pre-applied filters")
 
-def get_user_state(user_id: str) -> dict:
-    """Get or create user conversation state"""
+
+class ChatResponse(BaseModel):
+    """Enhanced chat response model"""
+    response: Any = Field(..., description="Bot response content")
+    type: str = Field(..., description="Response type: 'text' or 'driverList'")
+    applied_filters: Optional[Dict[str, Any]] = Field(None, description="Currently applied filters")
+    available_filters: Optional[List[str]] = Field(None, description="Available filter options")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class DriverListResponse(BaseModel):
+    """Driver list response model"""
+    drivers: List[Dict[str, Any]] = Field(..., description="List of driver information")
+    suggestion: str = Field(..., description="Bot suggestion or instruction text")
+    filters_applied: Dict[str, Any] = Field(default_factory=dict, description="Applied filters")
+    total_count: Optional[int] = Field(None, description="Total drivers found")
+
+
+def get_user_state(user_id: str) -> Dict[str, Any]:
+    """Get or create enhanced user conversation state"""
     if user_id not in user_conversations:
         user_conversations[user_id] = {
             "chat_history": [],
+            "all_fetched_drivers": [],
             "drivers_with_full_details": [],
             "filtered_drivers": [],
-            "applied_filters": {},
+            "applied_filters": {},  # Now properly typed as dict
             "pickup_location": None,
+            "drop_location": None,
+            "trip_type": None,
+            "trip_id": None,
             "last_bot_response": None,
             "tool_calls": [],
+            "current_display_index": 0,
+            "current_page": 1,
+            "fetch_count": 0,
+            # Customer details
             "customer_id": None,
             "customer_name": None,
             "customer_profile": None,
             "customer_phone": None,
+            # Enhanced metadata
+            "session_start": datetime.now().isoformat(),
+            "last_activity": datetime.now().isoformat(),
+            "total_requests": 0,
         }
+    
+    # Update last activity
+    user_conversations[user_id]["last_activity"] = datetime.now().isoformat()
+    user_conversations[user_id]["total_requests"] = user_conversations[user_id].get("total_requests", 0) + 1
+    
     return user_conversations[user_id]
 
+
 def is_duplicate_message(event: dict) -> bool:
-    """Check if this event was already processed using multiple identifiers"""
+    """Enhanced duplicate detection with multiple identifiers"""
     user_id = event.get("user")
     text = event.get("text", "").strip()
     timestamp = event.get("ts", "")
@@ -73,7 +141,7 @@ def is_duplicate_message(event: dict) -> bool:
     # Check if any identifier was already processed
     for identifier in identifiers:
         if identifier in processed_messages:
-            print(f"🔄 Duplicate detected: {identifier}")
+            logger.debug(f"Duplicate detected: {identifier}")
             return True
 
     # Add all identifiers to processed set
@@ -82,372 +150,242 @@ def is_duplicate_message(event: dict) -> bool:
 
     # Keep only last 200 messages to prevent memory leak
     if len(processed_messages) > 200:
-        # Keep only the newest 100
         new_set = set(list(processed_messages)[-100:])
         processed_messages.clear()
         processed_messages.update(new_set)
 
     return False
 
-def process_message(user_id: str, message: str, customer_details: dict = None) -> str:
-    """Process user message through cab agent - OPTIMIZED"""
-    print(f"🔄 Processing for {user_id}: {message}")
 
-    # Get user state
-    state = get_user_state(user_id)
-    if customer_details:
-        state.update(customer_details)
+def process_message(user_id: str, message: str, customer_details: Optional[Dict] = None) -> str:
+    """Enhanced message processing with better error handling and filtering awareness"""
+    logger.info(f"Processing for {user_id}: {message}")
 
-    # Handle simple commands
-    if message.lower().strip() == "reset":
-        # Clear the specific user's conversation
-        if user_id in user_conversations:
-            del user_conversations[user_id]
-        return "🔄 Reset! "
-
-    # Add message to chat history
-    state["chat_history"].append(HumanMessage(content=message))
-
-    # Process through your existing agent with timeout
     try:
-        print(f"🤖 Invoking agent...")
-        import signal
+        # Get user state
+        state = get_user_state(user_id)
+        
+        # Update customer details if provided
+        if customer_details:
+            state.update(customer_details)
 
-        # Set a timeout for the agent call
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Agent call timed out")
+        # Handle simple commands
+        if message.lower().strip() == "reset":
+            if user_id in user_conversations:
+                # Keep session metadata but reset conversation
+                session_start = user_conversations[user_id].get("session_start")
+                total_requests = user_conversations[user_id].get("total_requests", 0)
+                del user_conversations[user_id]
+                
+                # Reinitialize with preserved metadata
+                new_state = get_user_state(user_id)
+                new_state["session_start"] = session_start
+                new_state["total_requests"] = total_requests
+                
+            return "🔄 Conversation reset! Let's start fresh. Where would you like to travel?"
 
-        # Set timeout to 45 seconds
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(45)
+        # Handle filter status requests
+        if message.lower().strip() in ["show filters", "what filters", "current filters"]:
+            applied_filters = state.get("applied_filters", {})
+            if not applied_filters:
+                return "No filters are currently applied. You can filter by gender, age, vehicle type, languages, experience, and more!"
+            
+            filter_descriptions = []
+            for key, value in applied_filters.items():
+                if key == "gender":
+                    filter_descriptions.append(f"Gender: {value}")
+                elif key == "vehicleTypes":
+                    filter_descriptions.append(f"Vehicles: {value}")
+                elif key == "verifiedLanguages":
+                    filter_descriptions.append(f"Languages: {value}")
+                elif key == "isPetAllowed":
+                    filter_descriptions.append(f"Pet-friendly: {'Yes' if value else 'No'}")
+                elif key in ["minAge", "maxAge"]:
+                    filter_descriptions.append(f"Age: {key.replace('Age', '')} {value}")
+                else:
+                    filter_descriptions.append(f"{key}: {value}")
+            
+            return f"Current filters applied:\n• " + "\n• ".join(filter_descriptions)
 
+        # Add message to chat history
+        state["chat_history"].append(HumanMessage(content=message))
+
+        # Process through enhanced agent with timeout
         try:
-            result = cab_agent.invoke(state)
-        finally:
-            signal.alarm(0)  # Cancel the alarm
+            import signal
 
-        # Ensure result is valid
-        if not isinstance(result, dict):
-            print(f"⚠️ Agent returned non-dict: {type(result)}")
-            return "Sorry, I had a technical issue. Please try again."
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Agent call timed out")
 
-        # Update state
-        user_conversations[user_id] = result
-        print(f"✅ State updated for {user_id}")
+            # Set timeout to 45 seconds
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(45)
 
-        # Extract response with better fallbacks
-        response = None
+            try:
+                result = cab_agent.invoke(state)
+            finally:
+                signal.alarm(0)
 
-        # Try 1: Direct last_bot_response
-        if result.get("last_bot_response"):
-            response = result["last_bot_response"]
-            print(f"📤 Got direct response: {response[:50]}...")
+            # Validate result
+            if not isinstance(result, dict):
+                logger.warning(f"Agent returned non-dict: {type(result)}")
+                return "Sorry, I had a technical issue. Please try again."
 
-        # Try 2: Last AI message from chat history
-        if not response:
-            chat_history = result.get("chat_history", [])
-            for msg in reversed(chat_history):
-                if hasattr(msg, 'content') and 'AI' in str(type(msg)):
-                    if msg.content and msg.content.strip():
-                        response = msg.content
-                        print(f"📤 Got AI message: {response[:50]}...")
-                        break
+            # Update state
+            user_conversations[user_id] = result
+            logger.info(f"State updated for {user_id}")
 
-        # Try 3: Check if we have drivers and create a response
-        if not response:
-            drivers = result.get("drivers_with_full_details", [])
-            filtered_drivers = result.get("filtered_drivers", [])
+            # Extract response with enhanced fallbacks
+            response = extract_response(result)
+            
+            if not response or not response.strip():
+                response = "I'm here to help you find drivers! Please tell me your pickup location or what you're looking for."
+                logger.info("Using final fallback response")
 
-            if drivers or filtered_drivers:
-                response = f"I found {len(drivers or filtered_drivers)} drivers for you. Please let me know what specific information you'd like about them."
-                print(f"📤 Generated fallback response")
+            return response
 
-        # Final fallback
-        if not response or not response.strip():
-            response = "I'm here to help you find drivers! Please tell me your pickup location or what you're looking for."
-            print(f"📤 Using final fallback response")
-
-        return response
-
-    except TimeoutError:
-        print(f"⏰ Agent call timed out for {user_id}")
-        return "Sorry, that request is taking too long. Please try again with a simpler query or type 'reset'."
+        except TimeoutError:
+            logger.error(f"Agent call timed out for {user_id}")
+            return "Sorry, that request is taking too long. Please try a simpler query or type 'reset'."
+        
+    except ValidationError as e:
+        logger.error(f"Validation error for user {user_id}: {e}")
+        return "Sorry, there was an issue with your request format. Please try again."
     except Exception as e:
-        print(f"❌ Error processing message: {e}")
-        import traceback
-        traceback.print_exc()
-        return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
+        logger.error(f"Error processing message for {user_id}: {e}", exc_info=True)
+        return "Sorry, I encountered an issue. Please try again or type 'reset'."
 
-# <<< START OF CHANGES >>>
 
-def parse_driver_string(response_str: str):
-    """Parses the string representation of drivers into a structured dictionary."""
+def extract_response(result: Dict[str, Any]) -> str:
+    """Enhanced response extraction with better fallbacks"""
+    response = None
+
+    # Try 1: Direct last_bot_response
+    if result.get("last_bot_response"):
+        response = result["last_bot_response"]
+        logger.debug(f"Got direct response: {response[:50]}...")
+
+    # Try 2: Last AI message from chat history
+    if not response:
+        chat_history = result.get("chat_history", [])
+        for msg in reversed(chat_history):
+            if hasattr(msg, 'content') and 'AI' in str(type(msg)):
+                if msg.content and msg.content.strip():
+                    response = msg.content
+                    logger.debug(f"Got AI message: {response[:50]}...")
+                    break
+
+    # Try 3: Check if we have drivers and create contextual response
+    if not response:
+        drivers = result.get("all_fetched_drivers", [])
+        applied_filters = result.get("applied_filters", {})
+        
+        if drivers:
+            filter_text = ""
+            if applied_filters:
+                filter_descriptions = []
+                for key, value in applied_filters.items():
+                    if key == "gender":
+                        filter_descriptions.append(f"{value}")
+                    elif key == "vehicleTypes":
+                        filter_descriptions.append(f"{value} vehicles")
+                    elif key == "verifiedLanguages":
+                        filter_descriptions.append(f"{value} speaking")
+                filter_text = f" matching your criteria ({', '.join(filter_descriptions)})" if filter_descriptions else ""
+            
+            response = f"I found {len(drivers)} drivers{filter_text}. What specific information would you like about them?"
+            logger.debug("Generated contextual response with filter awareness")
+
+    return response or ""
+
+
+def parse_driver_string(response_str: str) -> Dict[str, Any]:
+    """Enhanced driver string parser with filter awareness"""
     drivers = []
-    # Split the response by double newlines to separate driver blocks and the suggestion text
+    suggestion = ""
+    applied_filters = {}
+    
+    # Split the response by double newlines
     blocks = response_str.strip().split('\n\n')
 
-    suggestion = ""
     driver_blocks = []
+    other_blocks = []
 
-    # Separate driver blocks from the suggestion text
     for block in blocks:
         if "Driver Name:" in block:
             driver_blocks.append(block)
         else:
-            suggestion = block.strip()
+            other_blocks.append(block.strip())
 
+    # Join non-driver blocks as suggestion
+    suggestion = " ".join(other_blocks)
+
+    # Parse driver blocks
     for block in driver_blocks:
         driver = {}
         lines = block.strip().split('\n')
 
-        # First line is always "Driver Name: ..."
         try:
+            # First line is always "Driver Name: ..."
             driver['name'] = lines[0].replace('Driver Name:', '').strip()
         except IndexError:
-            continue # Skip empty blocks
+            continue
 
-        # Other lines are "• Key: Value"
+        # Parse other lines
         for line in lines[1:]:
             line = line.replace('•', '').strip()
             if ':' in line:
                 key, value = line.split(':', 1)
                 key = key.strip().lower().replace(' ', '_').replace('per_km', 'price_per_km')
                 driver[key] = value.strip()
+        
         drivers.append(driver)
 
-    return {"drivers": drivers, "suggestion": suggestion}
+    return {
+        "drivers": drivers, 
+        "suggestion": suggestion,
+        "filters_applied": applied_filters,
+        "total_count": len(drivers)
+    }
 
 
-# --- API Endpoint for App Integration (Restored to previous version) ---
-@app.post("/chat")
+# --- Enhanced API Endpoint ---
+@app.post("/chat", response_model=ChatResponse)
 async def chat_with_bot(chat_request: ChatRequest):
     """
-    Handles a chat message from a user and returns the bot's response.
-    Maintains conversation context using user_id.
+    Enhanced chat endpoint with comprehensive filtering and type safety
     """
-    customer_details = {
-        "customer_id": chat_request.customer_id,
-        "customer_name": chat_request.customer_name,
-        "customer_profile": chat_request.customer_profile,
-        "customer_phone": chat_request.customer_phone,
-    }
-    response = process_message(chat_request.user_id, chat_request.message, customer_details)
-
-    # Check if the response contains driver details to parse it
-    if "Driver Name:" in response and "• City:" in response:
-        response_json = parse_driver_string(response)
-        return {"response": response_json, "type": "driverList"}
-    else:
-        # Otherwise, return the plain text response
-        return {"response": response, "type": "text"}
-# <<< END OF CHANGES >>>
-
-@app.post("/slack/events")
-async def handle_slack_events(request: Request):
-    """Handle Slack events - FIXED for multi-user access"""
-    data = await request.json()
-
-    # URL verification
-    if "challenge" in data:
-        return {"challenge": data["challenge"]}
-
-    # Handle messages
-    event = data.get("event", {})
-    if (event.get("type") == "message" and
-        "bot_id" not in event and
-        "subtype" not in event):
-
-        # Skip if duplicate event
-        if is_duplicate_message(event):
-            return {"status": "ok"}
-
-        user_id = event.get("user")
-        channel = event.get("channel")
-        text = event.get("text", "").strip()
-        channel_type = event.get("channel_type", "")
-
-        # Skip if no text
-        if not text:
-            return {"status": "ok"}
-
-        print(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
-
-        # Send immediate acknowledgment for search queries
-        if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
-            try:
-                # Try to send acknowledgment
-                slack_client.chat_postMessage(
-                channel=channel,
-                text=f"🚗 Thinking...",
-                as_user=False,
-                username="Cab Bot"
-                )
-                print("📤 Sent immediate acknowledgment")
-            except Exception as ack_error:
-                print(f"⚠️ Failed to send acknowledgment: {ack_error}")
-                # Don't fail the whole process if acknowledgment fails
-
-        # Process message (this is the slow part)
-        response = process_message(user_id, text)
-
-        # Ensure we have a valid response
-        if not response or not response.strip():
-            response = "I'm here to help you find drivers! Please tell me your pickup location."
-
-        # Send final response with multiple fallback strategies
-        success = False
-
-        # Strategy 1: Try original channel
-        try:
-            slack_client.chat_postMessage(
-                channel=channel,
-                text=f"🚗 {response}"
-            )
-            print(f"✅ Sent response to channel {channel}")
-            success = True
-        except Exception as e:
-            print(f"❌ Failed to send to channel {channel}: {e}")
-
-        # Strategy 2: If channel failed, try user DM with conversation
-        if not success:
-            try:
-                # First open a DM conversation with the user
-                dm_response = slack_client.conversations_open(users=[user_id])
-                if dm_response["ok"]:
-                    dm_channel = dm_response["channel"]["id"]
-                    slack_client.chat_postMessage(
-                        channel=dm_channel,
-                        text=f"🚗 {response}\n\n_Note: I'm replying here because I don't have access to send messages in the other channel._"
-                    )
-                    print(f"✅ Sent as DM to {user_id} via opened conversation")
-                    success = True
-                else:
-                    print(f"❌ Failed to open DM with {user_id}: {dm_response}")
-            except Exception as dm_error:
-                print(f"❌ Failed to send DM via conversation: {dm_error}")
-
-        # Strategy 3: Last resort - try direct user ID
-        if not success:
-            try:
-                slack_client.chat_postMessage(
-                    channel=user_id,
-                    text=f"🚗 {response}\n\n_Note: Having trouble with channel permissions. You might need to add me to the channel or your admin needs to update my permissions._"
-                )
-                print(f"✅ Sent as direct DM to {user_id}")
-                success = True
-            except Exception as direct_error:
-                print(f"❌ Failed direct DM: {direct_error}")
-
-        # Strategy 4: If all else fails, log the issue
-        if not success:
-            print(f"❌ COMPLETE FAILURE to send message to user {user_id}")
-            print(f"   Response was: {response[:100]}...")
-            # You might want to store this in a database or send to an error channel
-
-    return {"status": "ok"}
-
-
-@app.post("/slack/commands")
-async def handle_slash_commands(request: Request):
-    """Handle /cab slash command"""
-    form_data = await request.form()
-    user_id = form_data.get("user_id")
-    text = form_data.get("text", "").strip()
-
-    if not text:
-        response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
-    else:
-        response = process_message(user_id, text)
-
-    return {"text": f"🚗 {response}"}
-
-
-@app.get("/test_agent/{message}")
-async def test_agent_directly(message: str):
-    """Test the agent directly without Slack to debug issues"""
     try:
-        test_user = "test_user"
-        response = process_message(test_user, message)
-        state = user_conversations.get(test_user, {})
-
-        return {
-            "message": message,
-            "response": response,
-            "response_length": len(response),
-            "state_keys": list(state.keys()),
-            "chat_history_length": len(state.get("chat_history", [])),
-            "drivers_count": len(state.get("drivers_with_full_details", [])),
-            "last_bot_response": state.get("last_bot_response", "")[:100] + "..."
+        # Validate input
+        customer_details = {
+            "customer_id": chat_request.customer_id,
+            "customer_name": chat_request.customer_name,
+            "customer_profile": chat_request.customer_profile,
+            "customer_phone": chat_request.customer_phone,
         }
-    except Exception as e:
-        return {"error": str(e)}
 
+        # Process message
+        response = process_message(
+            chat_request.user_id, 
+            chat_request.message, 
+            customer_details
+        )
 
-@app.get("/debug/{user_id}")
-async def debug_user(user_id: str):
-    """Debug user state"""
-    if user_id in user_conversations:
-        state = user_conversations[user_id]
-        return {
-            "user_id": user_id,
-            "messages": len(state.get("chat_history", [])),
-            "drivers": len(state.get("drivers_with_full_details", [])),
-            "pickup": state.get("pickup_location"),
-            "last_response": state.get("last_bot_response", "")[:200] + "...",
-            "processed_messages_count": len(processed_messages)
-        }
-    return {"error": "User not found"}
-
-
-@app.get("/clear_cache")
-async def clear_cache():
-    """Clear message cache and user states (for debugging)"""
-    global processed_messages, user_conversations
-    processed_messages.clear()
-    user_conversations.clear()
-    return {"status": "Cache cleared"}
-
-
-@app.get("/")
-async def home():
-    """Simple status page"""
-    return {
-        "status": "running",
-        "bot": "Cab Booking Assistant",
-        "active_users": len(user_conversations),
-        "processed_messages": len(processed_messages),
-        "endpoints": {
-            "chat": "/chat (POST)",
-            "slack_events": "/slack/events (POST)",
-            "slack_commands": "/slack/commands (POST)",
-            "test_agent": "/test_agent/{message} (GET)",
-            "debug": "/debug/{user_id} (GET)",
-            "clear_cache": "/clear_cache (GET)",
-            "health": "/health (GET)"
-        }
-    }
-
-
-@app.get("/health")
-async def health():
-    """Health check"""
-    return {"status": "healthy"}
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    # Check environment
-    if not os.environ.get("SLACK_BOT_TOKEN"):
-        print("❌ Set SLACK_BOT_TOKEN environment variable")
-        print("   export SLACK_BOT_TOKEN='xoxb-your-token'")
-        # For the app endpoint, we don't strictly need the slack token,
-        # but other parts of the app might.
-        # So we'll leave this check in.
-        # exit(1) # You can comment this out if you are not using slack
-
-    print("🚀 Starting Cab Booking Bot API")
-
-    port = int(os.environ.get("PORT", 8080))
-    print(f"📍 Server running on: http://localhost:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+        # Get current state for metadata
+        state = user_conversations.get(chat_request.user_id, {})
+        applied_filters = state.get("applied_filters", {})
+        
+        # Determine response type and format
+        if "Driver Name:" in response and "• City:" in response:
+            # Parse driver list response
+            parsed_response = parse_driver_string(response)
+            
+            return ChatResponse(
+                response=parsed_response,
+                type="driverList",
+                applied_filters=applied_filters,
+                available_filters=get_available_filter_options(),
+                metadata={
+                    "total_drivers_fetched": len(state.get("all_fetched_drivers", [])),
+                    "current_page": state.get("current_page", 1),
+                    "has_more": len(state.get("all_fetched_drivers", [])) > state.get("current_display_index", 0) + 5
