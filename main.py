@@ -5,6 +5,7 @@ from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 
 # Import your existing agent
 from langgraph_agent.graph.builder import app as cab_agent
@@ -29,6 +30,10 @@ processed_messages = set()  # Track processed messages to avoid duplicates
 class ChatRequest(BaseModel):
     user_id: str
     message: str
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_profile: Optional[str] = None
+    customer_phone: Optional[str] = None
 
 def get_user_state(user_id: str) -> dict:
     """Get or create user conversation state"""
@@ -40,7 +45,11 @@ def get_user_state(user_id: str) -> dict:
             "applied_filters": {},
             "pickup_location": None,
             "last_bot_response": None,
-            "tool_calls": []
+            "tool_calls": [],
+            "customer_id": None,
+            "customer_name": None,
+            "customer_profile": None,
+            "customer_phone": None,
         }
     return user_conversations[user_id]
 
@@ -80,12 +89,14 @@ def is_duplicate_message(event: dict) -> bool:
 
     return False
 
-def process_message(user_id: str, message: str) -> str:
+def process_message(user_id: str, message: str, customer_details: dict = None) -> str:
     """Process user message through cab agent - OPTIMIZED"""
     print(f"🔄 Processing for {user_id}: {message}")
 
     # Get user state
     state = get_user_state(user_id)
+    if customer_details:
+        state.update(customer_details)
 
     # Handle simple commands
     if message.lower().strip() == "reset":
@@ -174,7 +185,7 @@ def parse_driver_string(response_str: str):
     drivers = []
     # Split the response by double newlines to separate driver blocks and the suggestion text
     blocks = response_str.strip().split('\n\n')
-    
+
     suggestion = ""
     driver_blocks = []
 
@@ -188,13 +199,13 @@ def parse_driver_string(response_str: str):
     for block in driver_blocks:
         driver = {}
         lines = block.strip().split('\n')
-        
+
         # First line is always "Driver Name: ..."
         try:
             driver['name'] = lines[0].replace('Driver Name:', '').strip()
         except IndexError:
             continue # Skip empty blocks
-            
+
         # Other lines are "• Key: Value"
         for line in lines[1:]:
             line = line.replace('•', '').strip()
@@ -203,7 +214,7 @@ def parse_driver_string(response_str: str):
                 key = key.strip().lower().replace(' ', '_').replace('per_km', 'price_per_km')
                 driver[key] = value.strip()
         drivers.append(driver)
-        
+
     return {"drivers": drivers, "suggestion": suggestion}
 
 
@@ -214,8 +225,14 @@ async def chat_with_bot(chat_request: ChatRequest):
     Handles a chat message from a user and returns the bot's response.
     Maintains conversation context using user_id.
     """
-    response = process_message(chat_request.user_id, chat_request.message)
-    
+    customer_details = {
+        "customer_id": chat_request.customer_id,
+        "customer_name": chat_request.customer_name,
+        "customer_profile": chat_request.customer_profile,
+        "customer_phone": chat_request.customer_phone,
+    }
+    response = process_message(chat_request.user_id, chat_request.message, customer_details)
+
     # Check if the response contains driver details to parse it
     if "Driver Name:" in response and "• City:" in response:
         response_json = parse_driver_string(response)
@@ -223,7 +240,6 @@ async def chat_with_bot(chat_request: ChatRequest):
     else:
         # Otherwise, return the plain text response
         return {"response": response, "type": "text"}
-
 # <<< END OF CHANGES >>>
 
 @app.post("/slack/events")

@@ -101,5 +101,11 @@ class CabBookingState(BaseModel):
     last_bot_response: Optional[str] = None
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
 
+    #customer details
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_profile: Optional[str] = None
+    customer_phone: Optional[str] = None
+
     class Config:
         arbitrary_types_allowed = True

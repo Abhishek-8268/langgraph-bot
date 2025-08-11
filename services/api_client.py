@@ -47,6 +47,7 @@ def get_drivers(
 
 
 def create_trip(
+    customer_details: Dict[str, str],
     pickup_city: str,
     drop_city: str,
     trip_type: str,
@@ -56,10 +57,10 @@ def create_trip(
     """Create a trip using the new API endpoint with the updated payload."""
     try:
         payload = {
-            "customerId": "69",
-            "customerName": "tester",
-            "customerPhone": "69696696969696",
-            "customerProfileImage": "",
+            "customerId": customer_details.get("id"),
+            "customerName": customer_details.get("name"),
+            "customerPhone": customer_details.get("phone"),
+            "customerProfileImage": customer_details.get("profile_image"),
             "pickUpLocation": {
                 "city": pickup_city,
                 "coordinates": "",
@@ -90,21 +91,22 @@ def create_trip(
 
 
 def send_availability_request(
-    trip_id: str, driver_ids: List[str], trip_details: Dict[str, Any]
+    trip_id: str,
+    driver_ids: List[str],
+    trip_details: Dict[str, Any],
+    customer_details: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """Sends an availability request to the specified drivers for a given trip."""
     try:
         payload = {
-            "driverIds": [  "pv258iLSjtfyBHyLgRjQcShJDt92",
-                            "NewcOnEO5DdiDkhKwc8LjGapICB3",
-                            "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2"],
+            "driverIds": ["pv258iLSjtfyBHyLgRjQcShJDt92", "NewcOnEO5DdiDkhKwc8LjGapICB3", "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2"],
             "data": {
                 "trip_details": trip_details,
                 "customerDetails": {
-                    "name": "Ajay Upadhyay",
-                    "id": "mXghqeK6O9TueSASXObqFkggX8l1",
-                    "phoneNo": "+917470468734",
-                    "profile_image": "https://example.com/image.jpg",
+                    "name": customer_details.get("name"),
+                    "id": customer_details.get("id"),
+                    "phoneNo": customer_details.get("phone"),
+                    "profile_image": customer_details.get("profile_image"),
                 },
                 "message": "Please confirm your availability for this trip.",
             },
@@ -124,7 +126,7 @@ def send_availability_request(
                 f"API error sending availability request: {response.status_code} - {response.text}"
             )
             return None
-        
+
         logger.info(f"Availability request sent successfully for Trip ID: {trip_id}")
         return response.json()
 
