@@ -13,7 +13,6 @@ from langchain_google_vertexai import ChatVertexAI
 from langgraph_agent.graph.sys_prompt import bot_prompt
 from langgraph_agent.tools.drivers_tools import (
     get_drivers_for_city,
-    filter_drivers,
     get_driver_details,
     remove_filters_from_search,
     show_more_drivers,
@@ -257,43 +256,6 @@ def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
             "total_drivers_fetched": len(all_drivers),
             "showing_drivers": len(drivers_to_show),
             "has_more": len(all_drivers) > config.DRIVERS_PER_DISPLAY,
-            "drivers": format_drivers_list(drivers_to_show),
-        }
-
-        return json.dumps(summary, indent=2)
-
-    elif tool_name == "filter_drivers":
-        # Show first 5 of filtered results
-        filtered = output if isinstance(output, list) else []
-
-        # Check if we need more fetch
-        if isinstance(output, dict) and output.get("need_more_fetch"):
-            return json.dumps(
-                {
-                    "current_matching_drivers": output.get("current_matches", 0),
-                    "message": "Found some matching drivers but fetching more to show you the best options.",
-                    "need_more_fetch": True,
-                    "next_page": output.get("next_page"),
-                }
-            )
-
-        drivers_to_show = filtered[: config.DRIVERS_PER_DISPLAY]
-
-        if not drivers_to_show:
-            all_drivers_count = len(state.get("all_fetched_drivers", []))
-            return json.dumps(
-                {
-                    "total_drivers_checked": all_drivers_count,
-                    "total_matching_drivers": 0,
-                    "message": f"I've searched through {all_drivers_count} drivers but couldn't find any matching your criteria.",
-                    "suggestion": "Would you like to adjust your filters or try a different city?",
-                }
-            )
-
-        summary = {
-            "total_matching_drivers": len(filtered),
-            "showing_drivers": len(drivers_to_show),
-            "has_more": len(filtered) > config.DRIVERS_PER_DISPLAY,
             "drivers": format_drivers_list(drivers_to_show),
         }
 
