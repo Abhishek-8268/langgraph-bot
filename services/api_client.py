@@ -99,7 +99,7 @@ def send_availability_request(
     """Sends an availability request to the specified drivers for a given trip."""
     try:
         payload = {
-            "driverIds": ["pv258iLSjtfyBHyLgRjQcShJDt92", "NewcOnEO5DdiDkhKwc8LjGapICB3", "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2"],
+            "driverIds": ["pv258iLSjtfyBHyLgRjQcShJDt92", "NewcOnEO5DdiDkhKwc8LjGapICB3", "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2", "QKCrCXmknFc1ySeFrlwXUfCVYL93"],
             "data": {
                 "trip_details": trip_details,
                 "customerDetails": {
