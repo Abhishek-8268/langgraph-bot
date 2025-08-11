@@ -4,6 +4,7 @@
 import json
 import logging
 from typing import Dict, Any, List
+from datetime import datetime
 
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
@@ -42,8 +43,13 @@ def agent_node(state: dict) -> dict:
     """Agent node that processes messages and decides actions"""
     logger.info("---AGENT NODE---")
 
+    # Get the current date to provide context to the LLM
+    current_date_str = datetime.now().strftime("%d-%m-%Y")
+    prompt_with_date = bot_prompt.format(current_date=current_date_str)
+
+
     # Build messages
-    messages = [SystemMessage(content=bot_prompt)]
+    messages = [SystemMessage(content=prompt_with_date)]
 
     # Add chat history
     chat_history = state.get("chat_history", [])
