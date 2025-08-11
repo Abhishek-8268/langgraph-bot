@@ -262,6 +262,7 @@ def check_driver_availability(
     pickup_location: str,
     drop_location: str,
     trip_type: str,
+    customer_details: Dict[str, str],
 ) -> Dict[str, Any]:
     """
     Checks the availability of a list of drivers for the current trip.
@@ -272,6 +273,7 @@ def check_driver_availability(
         pickup_location: The pickup city for the trip.
         drop_location: The drop-off city for the trip.
         trip_type: The type of trip (e.g., 'one-way').
+        customer_details: A dictionary containing customer's id, name, phone, and profile_image.
 
     Returns:
         A dictionary with the result of the availability check.
@@ -288,7 +290,7 @@ def check_driver_availability(
     }
 
     response = api_client.send_availability_request(
-        trip_id, driver_ids, trip_details
+        trip_id, driver_ids, trip_details, customer_details
     )
 
     if not response:
@@ -301,6 +303,7 @@ def create_trip(
     pickup_city: str,
     drop_city: str,
     trip_type: str,
+    customer_details: Dict[str, str],
     return_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -310,6 +313,7 @@ def create_trip(
         pickup_city: The city from where the trip starts. Should be a valid Indian city.
         drop_city: The city where the trip ends. Should be a valid Indian city.
         trip_type: The type of trip, must be either 'one-way' or 'round-trip'.
+        customer_details: A dictionary containing customer's id, name, phone, and profile_image.
         return_date: (Optional) The return date for a round-trip, in YYYY-MM-DD format.
 
     Returns:
@@ -339,7 +343,7 @@ def create_trip(
         end_date = start_date
 
     trip_data = api_client.create_trip(
-        pickup_city, drop_city, trip_type.lower(), start_date, end_date
+        customer_details, pickup_city, drop_city, trip_type.lower(), start_date, end_date
     )
 
     if not trip_data or "tripId" not in trip_data:

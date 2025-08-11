@@ -57,10 +57,10 @@ def create_trip(
     """Create a trip using the new API endpoint with the updated payload."""
     try:
         payload = {
-            "customerId": customer_details["id"],
-            "customerName": customer_details["name"],
-            "customerPhone": customer_details["phone"],
-            "customerProfileImage": customer_details["profile_image"],
+            "customerId": customer_details.get("id"),
+            "customerName": customer_details.get("name"),
+            "customerPhone": customer_details.get("phone"),
+            "customerProfileImage": customer_details.get("profile_image"),
             "pickUpLocation": {
                 "city": pickup_city,
                 "coordinates": "",
@@ -91,21 +91,22 @@ def create_trip(
 
 
 def send_availability_request(
-    trip_id: str, driver_ids: List[str], trip_details: Dict[str, Any]
+    trip_id: str,
+    driver_ids: List[str],
+    trip_details: Dict[str, Any],
+    customer_details: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """Sends an availability request to the specified drivers for a given trip."""
     try:
         payload = {
-            "driverIds": [  "pv258iLSjtfyBHyLgRjQcShJDt92",
-                            "NewcOnEO5DdiDkhKwc8LjGapICB3",
-                            "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2"],
+            "driverIds": ["pv258iLSjtfyBHyLgRjQcShJDt92", "NewcOnEO5DdiDkhKwc8LjGapICB3", "sHRv1ZZJ3pWKqH2yAo8OhRkwZPn2"],
             "data": {
                 "trip_details": trip_details,
                 "customerDetails": {
-                    "name": "Ajay Upadhyay",
-                    "id": "mXghqeK6O9TueSASXObqFkggX8l1",
-                    "phoneNo": "+917470468734",
-                    "profile_image": "https://example.com/image.jpg",
+                    "name": customer_details.get("name"),
+                    "id": customer_details.get("id"),
+                    "phoneNo": customer_details.get("phone"),
+                    "profile_image": customer_details.get("profile_image"),
                 },
                 "message": "Please confirm your availability for this trip.",
             },

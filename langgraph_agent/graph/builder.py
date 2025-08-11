@@ -121,11 +121,24 @@ def tool_executor_node(state: dict) -> dict:
             if tool_name == "get_driver_details":
                 tool_args["drivers"] = state_updates.get("all_fetched_drivers", [])
 
+            if tool_name == "create_trip":
+                tool_args["customer_details"] = {
+                    "id": state_updates.get("customer_id"),
+                    "name": state_updates.get("customer_name"),
+                    "phone": state_updates.get("customer_phone"),
+                    "profile_image": state_updates.get("customer_profile"),
+                }
             if tool_name == "check_driver_availability":
                 tool_args["trip_id"] = state_updates.get("trip_id")
                 tool_args["pickup_location"] = state_updates.get("pickup_location")
                 tool_args["drop_location"] = state_updates.get("drop_location")
                 tool_args["trip_type"] = state_updates.get("trip_type")
+                tool_args["customer_details"] = {
+                    "id": state_updates.get("customer_id"),
+                    "name": state_updates.get("customer_name"),
+                    "phone": state_updates.get("customer_phone"),
+                    "profile_image": state_updates.get("customer_profile"),
+                }
 
             # ***MODIFICATION: Pass filters directly to the get_drivers_for_city tool***
             if tool_name == "get_drivers_for_city":
