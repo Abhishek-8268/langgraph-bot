@@ -47,6 +47,7 @@ def get_drivers(
 
 
 def create_trip(
+    customer_details: Dict[str, str],
     pickup_city: str,
     drop_city: str,
     trip_type: str,
@@ -56,10 +57,10 @@ def create_trip(
     """Create a trip using the new API endpoint with the updated payload."""
     try:
         payload = {
-            "customerId": "69",
-            "customerName": "tester",
-            "customerPhone": "69696696969696",
-            "customerProfileImage": "",
+            "customerId": customer_details["id"],
+            "customerName": customer_details["name"],
+            "customerPhone": customer_details["phone"],
+            "customerProfileImage": customer_details["profile_image"],
             "pickUpLocation": {
                 "city": pickup_city,
                 "coordinates": "",
@@ -124,7 +125,7 @@ def send_availability_request(
                 f"API error sending availability request: {response.status_code} - {response.text}"
             )
             return None
-        
+
         logger.info(f"Availability request sent successfully for Trip ID: {trip_id}")
         return response.json()
 

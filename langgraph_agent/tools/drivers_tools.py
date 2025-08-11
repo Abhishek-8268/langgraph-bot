@@ -320,7 +320,7 @@ def create_trip(
     )
     # Format dates to match the API's expected format (e.g., 2025-08-07T09:00:00.000Z)
     start_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-    
+
     end_date = None
     if trip_type.lower() == "round-trip":
         if not return_date:
