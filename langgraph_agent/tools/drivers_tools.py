@@ -322,15 +322,17 @@ def create_trip(
     logger.info(
         f"Creating trip from {pickup_city} to {drop_city} ({trip_type})"
     )
-    # Format dates to match the API's expected format (e.g., 2025-08-07T09:00:00.000Z)
-    start_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    # Get the current time in UTC
+    start_date_dt = datetime.now(timezone.utc)
+    start_date = start_date_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
 
     end_date = None
     if trip_type.lower() == "round-trip":
         if not return_date:
             return {"status": "error", "message": "Return date is required for a round-trip."}
         try:
-            # Parse the date and set a predefined time of 12:00:00 in UTC
+            # Parse the date and combine with a fixed time (e.g., noon) in UTC
             end_date_dt = datetime.strptime(return_date, "%Y-%m-%d")
             end_date_dt_utc = datetime(
                 end_date_dt.year, end_date_dt.month, end_date_dt.day, 12, 0, 0, tzinfo=timezone.utc
