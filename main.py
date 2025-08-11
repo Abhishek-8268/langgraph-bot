@@ -349,6 +349,17 @@ def parse_driver_string(response_str: str) -> Dict[str, Any]:
     }
 
 
+def get_available_filter_options() -> List[str]:
+    """Get list of all available filter options"""
+    return [
+        "gender", "age", "married", "vehicleTypes", "isPetAllowed", 
+        "verifiedLanguages", "experience", "connections", "verified",
+        "profileVerified", "fraudReports", "allowHandicappedPersons",
+        "availableForCustomersPersonalCar", "availableForDrivingInEventWedding",
+        "availableForPartTimeFullTime"
+    ]
+
+
 # --- Enhanced API Endpoint ---
 @app.post("/chat", response_model=ChatResponse)
 async def chat_with_bot(chat_request: ChatRequest):
@@ -388,4 +399,223 @@ async def chat_with_bot(chat_request: ChatRequest):
                 metadata={
                     "total_drivers_fetched": len(state.get("all_fetched_drivers", [])),
                     "current_page": state.get("current_page", 1),
-                    "has_more": len(state.get("all_fetched_drivers", [])) > state.get("current_display_index", 0) + 5
+                    "has_more": len(state.get("all_fetched_drivers", [])) > state.get("current_display_index", 0) + 5,
+                    "session_duration": calculate_session_duration(state.get("session_start")),
+                    "total_requests": state.get("total_requests", 0)
+                }
+            )
+        else:
+            # Text response
+            return ChatResponse(
+                response=response,
+                type="text",
+                applied_filters=applied_filters,
+                available_filters=get_available_filter_options(),
+                metadata={
+                    "session_duration": calculate_session_duration(state.get("session_start")),
+                    "total_requests": state.get("total_requests", 0)
+                }
+            )
+
+    except ValidationError as e:
+        logger.error(f"Validation error in chat endpoint: {e}")
+        raise HTTPException(
+            status_code=422, 
+            detail=f"Invalid request format: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail="Internal server error. Please try again."
+        )
+
+
+def calculate_session_duration(session_start: Optional[str]) -> Optional[str]:
+    """Calculate session duration in human-readable format"""
+    if not session_start:
+        return None
+    
+    try:
+        start_time = datetime.fromisoformat(session_start.replace('Z', '+00:00'))
+        duration = datetime.now() - start_time.replace(tzinfo=None)
+        
+        if duration.days > 0:
+            return f"{duration.days}d {duration.seconds // 3600}h"
+        elif duration.seconds > 3600:
+            return f"{duration.seconds // 3600}h {(duration.seconds % 3600) // 60}m"
+        else:
+            return f"{duration.seconds // 60}m {duration.seconds % 60}s"
+    except:
+        return None
+
+
+# --- Additional API Endpoints ---
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0"
+    }
+
+
+@app.get("/stats")
+async def get_stats():
+    """Get system statistics"""
+    total_users = len(user_conversations)
+    total_conversations = sum(
+        len(state.get("chat_history", [])) 
+        for state in user_conversations.values()
+    )
+    total_drivers_fetched = sum(
+        len(state.get("all_fetched_drivers", []))
+        for state in user_conversations.values()
+    )
+    
+    return {
+        "total_users": total_users,
+        "total_conversations": total_conversations,
+        "total_drivers_fetched": total_drivers_fetched,
+        "available_filters": get_available_filter_options()
+    }
+
+
+@app.post("/reset/{user_id}")
+async def reset_user_conversation(user_id: str):
+    """Reset a user's conversation state"""
+    if user_id in user_conversations:
+        del user_conversations[user_id]
+        return {"message": f"Conversation reset for user {user_id}"}
+    return {"message": f"No conversation found for user {user_id}"}
+
+
+@app.get("/filters")
+async def get_filter_info():
+    """Get detailed information about available filters"""
+    return {
+        "available_filters": {
+            "gender": {
+                "type": "string",
+                "options": ["male", "female"],
+                "description": "Filter drivers by gender"
+            },
+            "minAge": {
+                "type": "integer",
+                "range": [18, 80],
+                "description": "Minimum age of drivers"
+            },
+            "maxAge": {
+                "type": "integer", 
+                "range": [18, 80],
+                "description": "Maximum age of drivers"
+            },
+            "married": {
+                "type": "boolean",
+                "description": "Marital status of drivers"
+            },
+            "vehicleTypes": {
+                "type": "string",
+                "options": ["sedan", "suv", "hatchback", "innova", "innovaCrysta", "tempoTraveller12Seater"],
+                "description": "Vehicle types (comma-separated for multiple)"
+            },
+            "isPetAllowed": {
+                "type": "boolean",
+                "description": "Whether driver allows pets"
+            },
+            "verifiedLanguages": {
+                "type": "string",
+                "options": ["English", "Hindi", "Punjabi", "Tamil", "Telugu", "Marathi", "Gujarati", "Bengali", "Kannada", "Malayalam", "Urdu", "Odia", "Assamese", "Nepali"],
+                "description": "Languages spoken by driver (comma-separated for multiple)"
+            },
+            "minExperience": {
+                "type": "integer",
+                "description": "Minimum years of experience"
+            },
+            "minConnections": {
+                "type": "integer",
+                "description": "Minimum number of connections"
+            },
+            "verified": {
+                "type": "boolean",
+                "description": "Whether driver is verified"
+            },
+            "profileVerified": {
+                "type": "boolean",
+                "description": "Whether driver profile is verified"
+            },
+            "fraudReports": {
+                "type": "integer",
+                "description": "Maximum number of fraud reports"
+            }
+        }
+    }
+
+
+# --- Slack Integration (if needed) ---
+@app.post("/slack/events")
+async def slack_events(request: Request):
+    """Handle Slack events"""
+    try:
+        body = await request.json()
+        
+        # Handle URL verification
+        if body.get("type") == "url_verification":
+            return {"challenge": body.get("challenge")}
+        
+        # Handle app mentions and DMs
+        if body.get("type") == "event_callback":
+            event = body.get("event", {})
+            
+            # Skip bot messages and duplicates
+            if event.get("subtype") == "bot_message" or is_duplicate_message(event):
+                return {"status": "ok"}
+            
+            user_id = event.get("user")
+            text = event.get("text", "").strip()
+            channel = event.get("channel")
+            
+            if user_id and text and channel:
+                # Process message
+                response = process_message(user_id, text)
+                
+                # Send response to Slack
+                try:
+                    slack_client.chat_postMessage(
+                        channel=channel,
+                        text=response,
+                        thread_ts=event.get("ts")
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending Slack message: {e}")
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        logger.error(f"Error handling Slack event: {e}")
+        return {"status": "error"}
+
+
+# --- Main Application Entry Point ---
+if __name__ == "__main__":
+    import uvicorn
+    
+    port = int(os.environ.get("PORT", 8000))
+    
+    logger.info(f"Starting Enhanced Cab Booking Bot on port {port}")
+    logger.info("Features enabled:")
+    logger.info("✅ Comprehensive driver filtering")
+    logger.info("✅ Type-safe Pydantic v2 schemas") 
+    logger.info("✅ Enhanced error handling")
+    logger.info("✅ Session management")
+    logger.info("✅ Real-time statistics")
+    logger.info("✅ Slack integration")
+    
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        reload=False
+    )

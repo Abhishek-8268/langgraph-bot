@@ -2,6 +2,7 @@
 """Enhanced driver tools with comprehensive filtering and type safety"""
 
 import logging
+import re
 from typing import List, Dict, Any, Optional, Union
 from langchain_core.tools import tool
 from datetime import datetime, timezone
