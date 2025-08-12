@@ -16,7 +16,7 @@ slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://www.cabswale.ai", "https:cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"], # Replace with your allowed origins
+    allow_origins=["http://localhost:3000", "https://www.cabswale.ai", "https://cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"], # Replace with your allowed origins
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
     allow_headers=["*"], # Or specific headers
