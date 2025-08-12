@@ -4,7 +4,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from langchain_core.tools import tool
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from services import api_client
 import config
@@ -211,6 +211,7 @@ def create_trip(
     drop_city: str,
     trip_type: str,
     customer_details: Dict[str, str],
+    start_date: Optional[str] = None,
     return_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -221,38 +222,51 @@ def create_trip(
         drop_city: The city where the trip ends. Should be a valid Indian city.
         trip_type: The type of trip, must be either 'one-way' or 'round-trip'.
         customer_details: A dictionary containing customer's id, name, phone, and profile_image.
+        start_date: (Optional) The start date for the trip, in YYYY-MM-DD format. Defaults to today.
         return_date: (Optional) The return date for a round-trip, in YYYY-MM-DD format.
 
     Returns:
         A dictionary with the trip creation status.
     """
     logger.info(
-        f"Creating trip from {pickup_city} to {drop_city} ({trip_type})"
+        f"Creating trip from {pickup_city} to {drop_city} ({trip_type}) on {start_date}"
     )
-    # Get the current time in UTC
-    start_date_dt = datetime.now(timezone.utc)
-    start_date = start_date_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
+    # Helper to parse and format dates
+    def format_date(date_str, default_time=datetime.now(timezone.utc)):
+        try:
+            # Combine date string with a time component and make it timezone-aware
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            dt_utc = datetime(
+                dt.year, dt.month, dt.day,
+                default_time.hour, default_time.minute, default_time.second,
+                tzinfo=timezone.utc
+            )
+            return dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        except (ValueError, TypeError):
+            # Fallback for safety
+            return default_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
-    end_date = None
+    # Set start_date to today if not provided
+    if not start_date:
+        start_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    else:
+        start_date_str = start_date
+
+    formatted_start_date = format_date(start_date_str)
+    formatted_end_date = None
+
     if trip_type.lower() == "round-trip":
         if not return_date:
             return {"status": "error", "message": "Return date is required for a round-trip."}
-        try:
-            # Parse the date and combine with a fixed time (e.g., noon) in UTC
-            end_date_dt = datetime.strptime(return_date, "%Y-%m-%d")
-            end_date_dt_utc = datetime(
-                end_date_dt.year, end_date_dt.month, end_date_dt.day, 12, 0, 0, tzinfo=timezone.utc
-            )
-            end_date = end_date_dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        except ValueError:
-            return {"status": "error", "message": "Invalid return date format. Please use YYYY-MM-DD."}
-    # For one-way trips, set a default end date (e.g., same as start date)
+        formatted_end_date = format_date(return_date)
     else:
-        end_date = start_date
+        # For one-way trips, end_date can be the same as start_date
+        formatted_end_date = formatted_start_date
+
 
     trip_data = api_client.create_trip(
-        customer_details, pickup_city, drop_city, trip_type.lower(), start_date, end_date
+        customer_details, pickup_city, drop_city, trip_type.lower(), formatted_start_date, formatted_end_date
     )
 
     if not trip_data or "tripId" not in trip_data:
