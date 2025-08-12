@@ -46,7 +46,6 @@ def agent_node(state: dict) -> dict:
     current_date_str = datetime.now().strftime("%Y-%m-%d")
     prompt_with_date = bot_prompt.format(current_date=current_date_str)
 
-
     # Build messages
     messages = [SystemMessage(content=prompt_with_date)]
 
@@ -92,7 +91,6 @@ def agent_node(state: dict) -> dict:
         }
 
 
-# langgraph_agent/graph/builder.py - Updated tool_executor_node function
 def tool_executor_node(state: dict) -> dict:
     """Execute tools requested by the agent, now with enhanced filter handling."""
     logger.info("---TOOL EXECUTOR NODE---")
@@ -147,19 +145,23 @@ def tool_executor_node(state: dict) -> dict:
                     "profile_image": state_updates.get("customer_profile"),
                 }
 
-            # Enhanced filter handling for get_drivers_for_city and apply_driver_filters
-            if tool_name in ["get_drivers_for_city", "apply_driver_filters"]:
+            # Enhanced filter handling for get_drivers_for_city
+            if tool_name == "get_drivers_for_city":
+                # Merge existing filters with new ones
                 current_filters = state_updates.get("applied_filters", {})
                 new_filters = tool_args.get("filters", {})
 
-                # Merge filters - new filters override existing ones
-                merged_filters = current_filters.copy()
-                merged_filters.update(new_filters)
-
-                tool_args["filters"] = merged_filters
-
-                # Update state with merged filters
-                state_updates["applied_filters"] = merged_filters
+                # Process and validate filter values
+                if new_filters:
+                    processed_new_filters = process_filter_values(new_filters)
+                    merged_filters = current_filters.copy()
+                    merged_filters.update(processed_new_filters)
+                    tool_args["filters"] = merged_filters
+                    state_updates["applied_filters"] = merged_filters
+                    logger.info(f"Merged filters: {merged_filters}")
+                elif current_filters:
+                    # Use existing filters if no new ones provided
+                    tool_args["filters"] = current_filters
 
                 # Set city context
                 if "city" not in tool_args and state_updates.get("pickup_location"):
@@ -181,7 +183,7 @@ def tool_executor_node(state: dict) -> dict:
                     state_updates["trip_type"] = tool_args.get("trip_type")
                     output["message"] = f"Trip created successfully from {tool_args.get('pickup_city')} to {tool_args.get('drop_city')}. Now I will find drivers for you."
 
-            elif tool_name in ["get_drivers_for_city", "apply_driver_filters"]:
+            elif tool_name == "get_drivers_for_city":
                 new_drivers = output.get("drivers", [])
                 page = output.get("page", 1)
 
@@ -260,6 +262,43 @@ def tool_executor_node(state: dict) -> dict:
     return state_updates
 
 
+def process_filter_values(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process filter values to ensure they are in the correct format for API.
+    """
+    processed = {}
+
+    for key, value in filters.items():
+        if value is None:
+            continue
+
+        # Boolean filters - ensure proper boolean values
+        if key in ['married', 'isPetAllowed', 'verified', 'profileVerified',
+                   'allowHandicappedPersons', 'availableForCustomersPersonalCar',
+                   'availableForDrivingInEventWedding', 'availableForPartTimeFullTime']:
+            if isinstance(value, str):
+                processed[key] = value.lower() in ['true', '1', 'yes', 'on']
+            else:
+                processed[key] = bool(value)
+
+        # Integer filters
+        elif key in ['minAge', 'maxAge', 'minExperience', 'minConnections', 'minDrivingExperience']:
+            try:
+                processed[key] = int(value)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid integer value for {key}: {value}")
+                continue
+
+        # String filters
+        elif key in ['verifiedLanguages', 'vehicleTypes', 'gender']:
+            processed[key] = str(value)
+
+        else:
+            processed[key] = value
+
+    return processed
+
+
 def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
     """Format tool output for LLM"""
     if tool_name == "get_drivers_for_city":
@@ -307,7 +346,6 @@ def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
         if not output:
             return json.dumps({"error": "Driver not found"})
         return json.dumps(format_drivers_list([output])[0], indent=2)
-
 
     elif isinstance(output, (dict, list)):
         return json.dumps(output, indent=2)
