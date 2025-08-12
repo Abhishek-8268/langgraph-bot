@@ -144,8 +144,34 @@ def tool_executor_node(state: dict) -> dict:
                     "phone": state_updates.get("customer_phone"),
                     "profile_image": state_updates.get("customer_profile"),
                 }
-                tool_args["start_date"] = state_updates.get("start_date")
-                tool_args["end_date"] = state_updates.get("end_date")
+                
+                # Convert dates from YYYY-MM-DD format to mm/dd/yy format for the API
+                from datetime import datetime
+                
+                start_date = state_updates.get("start_date")
+                end_date = state_updates.get("end_date")
+                
+                if start_date:
+                    # Parse the date and format it as mm/dd/yy
+                    try:
+                        dt = datetime.strptime(start_date[:10], "%Y-%m-%d")
+                        tool_args["start_date"] = dt.strftime("%m/%d/%y")
+                    except:
+                        # Fallback to today's date if parsing fails
+                        tool_args["start_date"] = datetime.now().strftime("%m/%d/%y")
+                else:
+                    # Use today's date if not available
+                    tool_args["start_date"] = datetime.now().strftime("%m/%d/%y")
+                
+                if end_date:
+                    try:
+                        dt = datetime.strptime(end_date[:10], "%Y-%m-%d")
+                        tool_args["end_date"] = dt.strftime("%m/%d/%y")
+                    except:
+                        tool_args["end_date"] = tool_args["start_date"]
+                else:
+                    # For one-way trips or if no end date, use start date
+                    tool_args["end_date"] = tool_args["start_date"]
 
             # Enhanced filter handling for get_drivers_for_city
             if tool_name == "get_drivers_for_city":

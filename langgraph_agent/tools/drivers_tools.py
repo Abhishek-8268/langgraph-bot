@@ -294,8 +294,8 @@ def check_driver_availability(
         driver_ids: A list of driver IDs to check for availability.
         pickup_location: The pickup city for the trip.
         drop_location: The drop-off city for the trip.
-        trip_start_date: start date of the trip from today's date in this format for ex: 12/08/2025 (mm/dd/yyyy),
-        trip_end_date: end date of the trip from today's date if the trip is round trip or multi-city or of multiple days else same as trip_start_date in this format for ex: 12/08/2025 (mm/dd/yyyy),
+        start_date: start date of the trip from today's date in this format for ex: 12/08/2025 (mm/dd/yyyy),
+        end_date: end date of the trip from today's date if the trip is round trip or multi-city or of multiple days else same as trip_start_date in this format for ex: 12/08/2025 (mm/dd/yyyy),
         trip_type: The type of trip (e.g., 'one-way').
         customer_details: A dictionary containing customer's id, name, phone, and profile_image.
 
