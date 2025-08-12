@@ -282,32 +282,39 @@ def check_driver_availability(
     pickup_location: str,
     drop_location: str,
     trip_type: str,
+    start_date: str,
+    end_date: str,
     customer_details: Dict[str, str],
 ) -> Dict[str, Any]:
     """
     Checks the availability of a list of drivers for the current trip.
 
     Args:
-        driver_ids: A list of driver IDs to check for availability.
         trip_id: The ID of the current trip.
+        driver_ids: A list of driver IDs to check for availability.
         pickup_location: The pickup city for the trip.
         drop_location: The drop-off city for the trip.
+        trip_start_date: start date of the trip from today's date in this format for ex: 12/08/2025 (mm/dd/yyyy),
+        trip_end_date: end date of the trip from today's date if the trip is round trip or multi-city or of multiple days else same as trip_start_date in this format for ex: 12/08/2025 (mm/dd/yyyy),
         trip_type: The type of trip (e.g., 'one-way').
         customer_details: A dictionary containing customer's id, name, phone, and profile_image.
 
     Returns:
         A dictionary with the result of the availability check.
     """
-    if not all([trip_id, pickup_location, drop_location, trip_type]):
+    if not all([trip_id, pickup_location, drop_location, trip_type, start_date, end_date]):
         return {"status": "error", "message": "Missing one or more required trip details."}
 
     trip_details = {
         "from": pickup_location,
         "to": drop_location,
         "trip_time": datetime.now(timezone.utc).strftime("%I:%M %p"),
-        "trip_date": datetime.now(timezone.utc).strftime("%m/%d/%y"),
+        "trip_start_date": start_date,
+        "trip_end_date": end_date,
         "trip_type": trip_type,
     }
+
+    print("\nTRIP-INFO\n", trip_details, "\n\n")
 
     response = api_client.send_availability_request(
         trip_id, driver_ids, trip_details, customer_details

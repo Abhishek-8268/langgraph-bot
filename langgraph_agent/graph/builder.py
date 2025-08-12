@@ -144,6 +144,8 @@ def tool_executor_node(state: dict) -> dict:
                     "phone": state_updates.get("customer_phone"),
                     "profile_image": state_updates.get("customer_profile"),
                 }
+                tool_args["start_date"] = state_updates.get("start_date")
+                tool_args["end_date"] = state_updates.get("end_date")
 
             # Enhanced filter handling for get_drivers_for_city
             if tool_name == "get_drivers_for_city":
