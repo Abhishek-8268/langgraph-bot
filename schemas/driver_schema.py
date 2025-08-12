@@ -120,7 +120,7 @@ class PremiumDriver(BaseModel):
     id: str
     name: Optional[str] = None
     city: Optional[str] = None
-    phoneNo: str = Field(pattern=r'^\d{10}$')  # 10-digit phone number
+    phoneNo: str = Field("")  # 10-digit phone number
     profile_image: Optional[str] = None
     username: Optional[str] = None
     verifiedVehicles: List[Vehicle] = Field(default_factory=list)
@@ -134,7 +134,7 @@ class Driver(BaseModel):
     id: str
     name: Optional[str] = None
     city: Optional[str] = None
-    phone: str = Field(pattern=r'^\d{10}$')
+    phone: str = Field("")
     username: Optional[str] = None
     profile_image: Optional[str] = None
     
@@ -263,7 +263,7 @@ class CustomerDetails(BaseModel):
     
     id: Optional[str] = None
     name: Optional[str] = None
-    phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
+    phone: Optional[str] = Field(None)
     profile_image: Optional[str] = None
 
 
@@ -357,7 +357,7 @@ class CabBookingState(BaseModel):
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     customer_profile: Optional[str] = None
-    customer_phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
+    customer_phone: Optional[str] = Field(None)
 
 
 class ToolResponse(BaseModel):
