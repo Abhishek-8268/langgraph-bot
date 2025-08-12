@@ -305,7 +305,7 @@ def check_driver_availability(
         "from": pickup_location,
         "to": drop_location,
         "trip_time": datetime.now(timezone.utc).strftime("%I:%M %p"),
-        "trip_date": datetime.now(timezone.utc).strftime("%d/%m/%y"),
+        "trip_date": datetime.now(timezone.utc).strftime("%m/%d/%y"),
         "trip_type": trip_type,
     }
 
