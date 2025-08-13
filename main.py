@@ -1,10 +1,10 @@
 import os
 import re  # Added import for completeness
-from fastapi import FastAPI, Request
-from slack_sdk import WebClient
-from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request  # type: ignore
+from slack_sdk import WebClient       # type: ignore
+from langchain_core.messages import HumanMessage # type: ignore
+from pydantic import BaseModel                # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from typing import Optional
 
 # Import your existing agent

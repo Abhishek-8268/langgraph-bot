@@ -2,6 +2,7 @@
     "python.analysis.extraPaths": [
         "./langgraph_/graph",
         "./schemas/driver_",
-        "./schemas/driver_"
+        "./schemas/driver_",
+        ".venv"
     ]
 }
