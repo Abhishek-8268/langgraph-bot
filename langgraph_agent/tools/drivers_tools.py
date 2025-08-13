@@ -294,8 +294,8 @@ def check_driver_availability(
         driver_ids: A list of driver IDs to check for availability.
         pickup_location: The pickup city for the trip.
         drop_location: The drop-off city for the trip.
-        start_date: start date of the trip from today's date in this format for ex: 12/08/2025 (mm/dd/yyyy),
-        end_date: end date of the trip from today's date if the trip is round trip or multi-city or of multiple days else same as trip_start_date in this format for ex: 12/08/2025 (mm/dd/yyyy),
+        start_date: start date of the trip in mm/dd/yy format
+        end_date: end date of the trip in mm/dd/yy format (same as start_date for one-way trips)
         trip_type: The type of trip (e.g., 'one-way').
         customer_details: A dictionary containing customer's id, name, phone, and profile_image.
 
@@ -314,7 +314,7 @@ def check_driver_availability(
         "trip_type": trip_type,
     }
 
-    print("\nTRIP-INFO\n", trip_details, "\n\n")
+    logger.info(f"Sending availability request with trip details: {trip_details}")
 
     response = api_client.send_availability_request(
         trip_id, driver_ids, trip_details, customer_details
@@ -325,13 +325,14 @@ def check_driver_availability(
 
     return {"status": "success", "message": "Availability requests have been sent to the drivers. You will be notified shortly."}
 
+
 @tool
 def create_trip(
     pickup_city: str,
     drop_city: str,
     trip_type: str,
     customer_details: Dict[str, str],
-    start_date: Optional[str],
+    start_date: str,
     return_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -349,45 +350,51 @@ def create_trip(
         A dictionary with the trip creation status.
     """
     logger.info(
-        f"Creating trip from {pickup_city} to {drop_city} ({trip_type})"
+        f"Creating trip from {pickup_city} to {drop_city} ({trip_type}) - Start: {start_date}, Return: {return_date}"
     )
-    # Get the current time in UTC
-    start_date_dt = datetime.now(timezone.utc)
-    start_date = start_date_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
-
-    # Helper to parse and format dates
-    def format_date(date_str, default_time=datetime.now(timezone.utc)):
+    # Helper to parse and format dates for API
+    def format_date_for_api(date_str):
+        """Convert YYYY-MM-DD to ISO format with current time"""
         try:
-            # Combine date string with a time component and make it timezone-aware
+            # Parse the YYYY-MM-DD date
             dt = datetime.strptime(date_str, "%Y-%m-%d")
-            dt_utc = datetime(
+            # Add current time and timezone
+            current_time = datetime.now(timezone.utc)
+            dt_with_time = datetime(
                 dt.year, dt.month, dt.day,
-                default_time.hour, default_time.minute, default_time.second,
+                current_time.hour, current_time.minute, current_time.second,
                 tzinfo=timezone.utc
             )
-            return dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        except (ValueError, TypeError):
-            # Fallback for safety
-            return default_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        # Set start_date to today if not provided
-    if not start_date:
-            start_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    else:
-        start_date_str = start_date
+            # Format for API
+            return dt_with_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error parsing date {date_str}: {e}")
+            # Fallback to today
+            return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
-    formatted_start_date = format_date(start_date_str)
-    formatted_end_date = None
-    end_date = None
+    # Format dates for API
+    formatted_start_date = format_date_for_api(start_date)
+
+    # Handle end date based on trip type
     if trip_type.lower() == "round-trip":
         if not return_date:
             return {"status": "error", "message": "Return date is required for a round-trip."}
-        formatted_end_date = format_date(return_date)
+        formatted_end_date = format_date_for_api(return_date)
     else:
+        # For one-way trips, end date is same as start date
         formatted_end_date = formatted_start_date
 
+    logger.info(f"Formatted dates - Start: {formatted_start_date}, End: {formatted_end_date}")
+
+    # Call API with properly formatted dates
     trip_data = api_client.create_trip(
-        customer_details, pickup_city, drop_city, trip_type.lower(), formatted_start_date, formatted_end_date
+        customer_details,
+        pickup_city,
+        drop_city,
+        trip_type.lower(),
+        formatted_start_date,
+        formatted_end_date
     )
 
     if not trip_data or "tripId" not in trip_data:
@@ -398,4 +405,6 @@ def create_trip(
         "message": "Trip created successfully.",
         "tripId": trip_data.get("tripId"),
         "pickup_city": pickup_city,
+        "start_date": start_date,  # Store original date format in state
+        "end_date": return_date if return_date else start_date,  # Store for availability check
     }

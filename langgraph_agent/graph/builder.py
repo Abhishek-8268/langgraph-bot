@@ -126,12 +126,15 @@ def tool_executor_node(state: dict) -> dict:
                 tool_args["drivers"] = state_updates.get("all_fetched_drivers", [])
 
             if tool_name == "create_trip":
+                # Add customer details from state
                 tool_args["customer_details"] = {
                     "id": state_updates.get("customer_id"),
                     "name": state_updates.get("customer_name"),
                     "phone": state_updates.get("customer_phone"),
                     "profile_image": state_updates.get("customer_profile"),
                 }
+
+                logger.info(f"Creating trip with dates - Start: {tool_args.get('start_date')}, Return: {tool_args.get('return_date')}")
 
             if tool_name == "check_driver_availability":
                 tool_args["trip_id"] = state_updates.get("trip_id")
@@ -144,34 +147,32 @@ def tool_executor_node(state: dict) -> dict:
                     "phone": state_updates.get("customer_phone"),
                     "profile_image": state_updates.get("customer_profile"),
                 }
-                
-                # Convert dates from YYYY-MM-DD format to mm/dd/yy format for the API
-                from datetime import datetime
-                
+
+                # Convert dates from YYYY-MM-DD format to mm/dd/yy format for the availability API
                 start_date = state_updates.get("start_date")
                 end_date = state_updates.get("end_date")
-                
+
                 if start_date:
-                    # Parse the date and format it as mm/dd/yy
                     try:
-                        dt = datetime.strptime(start_date[:10], "%Y-%m-%d")
+                        # Parse YYYY-MM-DD and convert to mm/dd/yy
+                        dt = datetime.strptime(start_date, "%Y-%m-%d")
                         tool_args["start_date"] = dt.strftime("%m/%d/%y")
                     except:
-                        # Fallback to today's date if parsing fails
+                        # Fallback to today if parsing fails
                         tool_args["start_date"] = datetime.now().strftime("%m/%d/%y")
                 else:
-                    # Use today's date if not available
                     tool_args["start_date"] = datetime.now().strftime("%m/%d/%y")
-                
+
                 if end_date:
                     try:
-                        dt = datetime.strptime(end_date[:10], "%Y-%m-%d")
+                        dt = datetime.strptime(end_date, "%Y-%m-%d")
                         tool_args["end_date"] = dt.strftime("%m/%d/%y")
                     except:
                         tool_args["end_date"] = tool_args["start_date"]
                 else:
-                    # For one-way trips or if no end date, use start date
                     tool_args["end_date"] = tool_args["start_date"]
+
+                logger.info(f"Checking availability with dates - Start: {tool_args['start_date']}, End: {tool_args['end_date']}")
 
             # Enhanced filter handling for get_drivers_for_city
             if tool_name == "get_drivers_for_city":
@@ -205,10 +206,17 @@ def tool_executor_node(state: dict) -> dict:
             # Update state based on the tool's output
             if tool_name == "create_trip":
                 if "error" not in output:
+                    # Store all the trip details in state
                     state_updates["trip_id"] = output.get("tripId")
-                    state_updates["pickup_location"] = tool_args.get("pickup_city")
+                    state_updates["pickup_location"] = output.get("pickup_city")
                     state_updates["drop_location"] = tool_args.get("drop_city")
                     state_updates["trip_type"] = tool_args.get("trip_type")
+                    # Store the dates from the output (already in YYYY-MM-DD format)
+                    state_updates["start_date"] = output.get("start_date")
+                    state_updates["end_date"] = output.get("end_date")
+
+                    logger.info(f"Trip created. Stored dates - Start: {state_updates['start_date']}, End: {state_updates['end_date']}")
+
                     output["message"] = f"Trip created successfully from {tool_args.get('pickup_city')} to {tool_args.get('drop_city')}. Now I will find drivers for you."
 
             elif tool_name == "get_drivers_for_city":
@@ -243,7 +251,7 @@ def tool_executor_node(state: dict) -> dict:
                 if info.get("should_fetch_new"):
                     current_page = state_updates.get("current_page", 1)
                     if state_updates.get("fetch_count", 0) < config.MAX_FETCH_DEPTH:
-                         output = {
+                        output = {
                             "message": "need_more_drivers",
                             "next_page": current_page + 1,
                         }
