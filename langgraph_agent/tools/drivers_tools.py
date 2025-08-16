@@ -4,8 +4,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from langchain_core.tools import tool
-from datetime import datetime, timezone, timedelta
-
+from datetime import datetime, timezone
 from services import api_client
 import config
 
@@ -159,47 +158,46 @@ def apply_driver_filters(
 
     page = 1 if reset_pagination else 1
 
-    return get_drivers_for_city(city=city, page=page, filters=filters)
+    # Call the function directly, not as a tool
+    return get_drivers_for_city.invoke({"city": city, "page": page, "filters": filters})
 
 
 def process_driver_data(driver_data: Dict) -> Dict:
     """Process and format driver data from the new API response"""
     # Process vehicles
     vehicles = []
-    for vehicle in driver_data.get("verifiedVehicles", []):
+    for vehicle in driver_data.get("verified_vehicles", driver_data.get("verifiedVehicles", [])):
         vehicle_info = {
             "model": vehicle.get("model", "Unknown"),
-            "type": vehicle.get("vehicleType", "Unknown"),
+            "type": vehicle.get("vehicle_type", vehicle.get("vehicleType", "Unknown")),
             "reg_no": vehicle.get("reg_no", ""),
-            "per_km_cost": float(vehicle.get("perKmCost", 0)),
+            "per_km_cost": float(vehicle.get("per_km_cost", vehicle.get("perKmCost", 0))),
             "is_commercial": vehicle.get("is_commercial", False),
-            "image_url": vehicle.get("imageUrl"),
+            "image_url": vehicle.get("primary_image_url", vehicle.get("imageUrl")),
         }
         vehicles.append(vehicle_info)
 
-    # Combine data
+    # Combine data - handle both snake_case and camelCase
     return {
         "id": driver_data.get("id"),
         "name": driver_data.get("name", "Unknown"),
         "city": driver_data.get("city", ""),
-        "phone": driver_data.get("phoneNo", ""),
-        "username": driver_data.get("userName", ""),
-        "profile_image": driver_data.get("profileImage"),
+        "phone": driver_data.get("phone_no", driver_data.get("phoneNo", "")),
+        "username": driver_data.get("username", driver_data.get("userName", "")),
+        "profile_image": driver_data.get("profile_image", driver_data.get("profileImage")),
         "age": driver_data.get("age"),
         "experience": driver_data.get("experience", 0),
-        "bio": driver_data.get("driverBio", ""),
+        "bio": driver_data.get("bio", driver_data.get("driverBio", "")),
         "connections": driver_data.get("connections", 0),
-        "is_pet_allowed": driver_data.get("isPetAllowed", False),
+        "is_pet_allowed": driver_data.get("is_pet_allowed", driver_data.get("isPetAllowed", False)),
         "is_married": driver_data.get("married", False),
-        "languages": [lang for lang in driver_data.get("verifiedLanguages", []) if lang],
-        "trip_types": driver_data.get("tripTypes", []),
+        "languages": driver_data.get("verified_languages", driver_data.get("verifiedLanguages", [])),
+        "trip_types": driver_data.get("trip_types", driver_data.get("tripTypes", [])),
         "routes": driver_data.get("routes", []),
-        "verified_languages": [
-            {"name": lang, "verified": True}
-            for lang in driver_data.get("verifiedLanguages", []) if lang
-        ],
+        "verified_languages": driver_data.get("verified_languages", driver_data.get("verifiedLanguages", [])),
         "vehicles": vehicles,
-        "lastAccess": driver_data.get("lastAccess"),
+        "lastAccess": driver_data.get("last_access", driver_data.get("lastAccess")),
+        "profile_url": driver_data.get("profile_url", ""),
     }
 
 

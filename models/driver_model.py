@@ -1,7 +1,7 @@
-# schemas/driver_schema.py
+# schemas/driver_model.py
 """Driver data schemas"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from langchain_core.messages import BaseMessage
@@ -107,5 +107,4 @@ class CabBookingState(BaseModel):
     customer_profile: Optional[str] = None
     customer_phone: Optional[str] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)

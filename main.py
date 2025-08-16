@@ -1,14 +1,16 @@
 import os
-import re  # Added import for completeness
+import signal
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request
 from slack_sdk import WebClient
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+import traceback
 
-# Import your existing agent
+# Import your agent and state model
 from langgraph_agent.graph.builder import app as cab_agent
+from models.state_model import ConversationState
 
 # Simple setup
 app = FastAPI(title="Cab Booking Bot")
@@ -16,15 +18,20 @@ slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://www.cabswale.ai", "https://cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"], # Replace with your allowed origins
+    allow_origins=[
+        "http://localhost:3000",
+        "https://www.cabswale.ai",
+        "https://cabswale-landing-page-dev--cabswale-ai.us-central1.hosted.app"
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Or ["*"] for all methods
-    allow_headers=["*"], # Or specific headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 # Simple in-memory storage (for demo - use Redis/DB in production)
-user_conversations = {}
+user_conversations: Dict[str, ConversationState] = {}
 processed_messages = set()  # Track processed messages to avoid duplicates
+
 
 # --- Pydantic model for the /chat endpoint ---
 class ChatRequest(BaseModel):
@@ -35,23 +42,34 @@ class ChatRequest(BaseModel):
     customer_profile: Optional[str] = None
     customer_phone: Optional[str] = None
 
-def get_user_state(user_id: str) -> dict:
-    """Get or create user conversation state"""
+
+def get_user_state(user_id: str) -> ConversationState:
+    """Get or create user conversation state using Pydantic model"""
     if user_id not in user_conversations:
-        user_conversations[user_id] = {
-            "chat_history": [],
-            "drivers_with_full_details": [],
-            "filtered_drivers": [],
-            "applied_filters": {},
-            "pickup_location": None,
-            "last_bot_response": None,
-            "tool_calls": [],
-            "customer_id": None,
-            "customer_name": None,
-            "customer_profile": None,
-            "customer_phone": None,
-        }
+        # Create new state using Pydantic model
+        user_conversations[user_id] = ConversationState(
+            chat_history=[],
+            all_fetched_drivers=[],
+            filtered_drivers=[],
+            applied_filters={},
+            current_display_index=0,
+            current_page=1,
+            fetch_count=0,
+            trip_id=None,
+            pickup_location=None,
+            drop_location=None,
+            trip_type=None,
+            start_date=None,
+            end_date=None,
+            customer_id=None,
+            customer_name=None,
+            customer_phone=None,
+            customer_profile=None,
+            last_bot_response=None,
+            tool_calls=[]
+        )
     return user_conversations[user_id]
+
 
 def is_duplicate_message(event: dict) -> bool:
     """Check if this event was already processed using multiple identifiers"""
@@ -89,29 +107,38 @@ def is_duplicate_message(event: dict) -> bool:
 
     return False
 
-def process_message(user_id: str, message: str, customer_details: dict = None) -> str:
-    """Process user message through cab agent - OPTIMIZED"""
+
+def process_message(user_id: str, message: str, customer_details: dict = {}) -> str:
+    """Process user message through cab agent with Pydantic state management"""
     print(f"🔄 Processing for {user_id}: {message}")
 
-    # Get user state
-    state = get_user_state(user_id)
+    # Get user state (Pydantic model)
+    state_model = get_user_state(user_id)
+
+    # Update customer details if provided
     if customer_details:
-        state.update(customer_details)
+        state_model.customer_id = customer_details.get("customer_id")
+        state_model.customer_name = customer_details.get("customer_name")
+        state_model.customer_profile = customer_details.get("customer_profile")
+        state_model.customer_phone = customer_details.get("customer_phone")
 
     # Handle simple commands
     if message.lower().strip() == "reset":
         # Clear the specific user's conversation
         if user_id in user_conversations:
-            del user_conversations[user_id]
-        return "🔄 Reset! "
+            # Reset the state using Pydantic model's reset method
+            user_conversations[user_id].reset()
+        return "🔄 Reset! Let's start fresh. Where would you like to travel?"
 
     # Add message to chat history
-    state["chat_history"].append(HumanMessage(content=message))
+    state_model.chat_history.append(HumanMessage(content=message))
+
+    # Convert Pydantic model to dict for the agent
+    state_dict = state_model.to_dict()
 
     # Process through your existing agent with timeout
     try:
         print(f"🤖 Invoking agent...")
-        import signal
 
         # Set a timeout for the agent call
         def timeout_handler(signum, frame):
@@ -122,7 +149,7 @@ def process_message(user_id: str, message: str, customer_details: dict = None) -
         signal.alarm(45)
 
         try:
-            result = cab_agent.invoke(state)
+            result = cab_agent.invoke(state_dict)
         finally:
             signal.alarm(0)  # Cancel the alarm
 
@@ -131,35 +158,47 @@ def process_message(user_id: str, message: str, customer_details: dict = None) -
             print(f"⚠️ Agent returned non-dict: {type(result)}")
             return "Sorry, I had a technical issue. Please try again."
 
-        # Update state
-        user_conversations[user_id] = result
+        # Update the Pydantic state model from the result
+        # We update only the fields that the agent might have modified
+        state_model.chat_history = result.get("chat_history", state_model.chat_history)
+        state_model.all_fetched_drivers = result.get("all_fetched_drivers", state_model.all_fetched_drivers)
+        state_model.filtered_drivers = result.get("filtered_drivers", state_model.filtered_drivers)
+        state_model.applied_filters = result.get("applied_filters", state_model.applied_filters)
+        state_model.current_display_index = result.get("current_display_index", state_model.current_display_index)
+        state_model.current_page = result.get("current_page", state_model.current_page)
+        state_model.fetch_count = result.get("fetch_count", state_model.fetch_count)
+        state_model.trip_id = result.get("trip_id", state_model.trip_id)
+        state_model.pickup_location = result.get("pickup_location", state_model.pickup_location)
+        state_model.drop_location = result.get("drop_location", state_model.drop_location)
+        state_model.trip_type = result.get("trip_type", state_model.trip_type)
+        state_model.start_date = result.get("start_date", state_model.start_date)
+        state_model.end_date = result.get("end_date", state_model.end_date)
+        state_model.last_bot_response = result.get("last_bot_response", state_model.last_bot_response)
+        state_model.tool_calls = result.get("tool_calls", state_model.tool_calls)
+
         print(f"✅ State updated for {user_id}")
 
         # Extract response with better fallbacks
         response = None
 
         # Try 1: Direct last_bot_response
-        if result.get("last_bot_response"):
-            response = result["last_bot_response"]
-            print(f"📤 Got direct response: {response[:50]}...")
+        if state_model.last_bot_response:
+            response = state_model.last_bot_response
+            print(f"📤 Got direct response: {response[:50] if len(response) > 50 else response}...")
 
         # Try 2: Last AI message from chat history
         if not response:
-            chat_history = result.get("chat_history", [])
-            for msg in reversed(chat_history):
+            for msg in reversed(state_model.chat_history):
                 if hasattr(msg, 'content') and 'AI' in str(type(msg)):
                     if msg.content and msg.content.strip():
                         response = msg.content
-                        print(f"📤 Got AI message: {response[:50]}...")
+                        print(f"📤 Got AI message: {response[:50] if len(response) > 50 else response}...")
                         break
 
         # Try 3: Check if we have drivers and create a response
         if not response:
-            drivers = result.get("drivers_with_full_details", [])
-            filtered_drivers = result.get("filtered_drivers", [])
-
-            if drivers or filtered_drivers:
-                response = f"I found {len(drivers or filtered_drivers)} drivers for you. Please let me know what specific information you'd like about them."
+            if state_model.all_fetched_drivers:
+                response = f"I found {len(state_model.all_fetched_drivers)} drivers for you. Please let me know what specific information you'd like about them."
                 print(f"📤 Generated fallback response")
 
         # Final fallback
@@ -174,13 +213,11 @@ def process_message(user_id: str, message: str, customer_details: dict = None) -
         return "Sorry, that request is taking too long. Please try again with a simpler query or type 'reset'."
     except Exception as e:
         print(f"❌ Error processing message: {e}")
-        import traceback
         traceback.print_exc()
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
 
-# <<< START OF CHANGES >>>
 
-def parse_driver_string(response_str: str):
+def parse_driver_string(response_str: str) -> Dict[str, Any]:
     """Parses the string representation of drivers into a structured dictionary."""
     drivers = []
     # Split the response by double newlines to separate driver blocks and the suggestion text
@@ -204,7 +241,7 @@ def parse_driver_string(response_str: str):
         try:
             driver['name'] = lines[0].replace('Driver Name:', '').strip()
         except IndexError:
-            continue # Skip empty blocks
+            continue  # Skip empty blocks
 
         # Other lines are "• Key: Value"
         for line in lines[1:]:
@@ -218,7 +255,7 @@ def parse_driver_string(response_str: str):
     return {"drivers": drivers, "suggestion": suggestion}
 
 
-# --- API Endpoint for App Integration (Restored to previous version) ---
+# --- API Endpoint for App Integration ---
 @app.post("/chat")
 async def chat_with_bot(chat_request: ChatRequest):
     """
@@ -240,7 +277,7 @@ async def chat_with_bot(chat_request: ChatRequest):
     else:
         # Otherwise, return the plain text response
         return {"response": response, "type": "text"}
-# <<< END OF CHANGES >>>
+
 
 @app.post("/slack/events")
 async def handle_slack_events(request: Request):
@@ -254,8 +291,8 @@ async def handle_slack_events(request: Request):
     # Handle messages
     event = data.get("event", {})
     if (event.get("type") == "message" and
-        "bot_id" not in event and
-        "subtype" not in event):
+            "bot_id" not in event and
+            "subtype" not in event):
 
         # Skip if duplicate event
         if is_duplicate_message(event):
@@ -277,15 +314,14 @@ async def handle_slack_events(request: Request):
             try:
                 # Try to send acknowledgment
                 slack_client.chat_postMessage(
-                channel=channel,
-                text=f"🚗 Thinking...",
-                as_user=False,
-                username="Cab Bot"
+                    channel=channel,
+                    text=f"🚗 Thinking...",
+                    as_user=False,
+                    username="Cab Bot"
                 )
                 print("📤 Sent immediate acknowledgment")
             except Exception as ack_error:
                 print(f"⚠️ Failed to send acknowledgment: {ack_error}")
-                # Don't fail the whole process if acknowledgment fails
 
         # Process message (this is the slow part)
         response = process_message(user_id, text)
@@ -311,7 +347,6 @@ async def handle_slack_events(request: Request):
         # Strategy 2: If channel failed, try user DM with conversation
         if not success:
             try:
-                # First open a DM conversation with the user
                 dm_response = slack_client.conversations_open(users=[user_id])
                 if dm_response["ok"]:
                     dm_channel = dm_response["channel"]["id"]
@@ -342,7 +377,6 @@ async def handle_slack_events(request: Request):
         if not success:
             print(f"❌ COMPLETE FAILURE to send message to user {user_id}")
             print(f"   Response was: {response[:100]}...")
-            # You might want to store this in a database or send to an error channel
 
     return {"status": "ok"}
 
@@ -368,16 +402,23 @@ async def test_agent_directly(message: str):
     try:
         test_user = "test_user"
         response = process_message(test_user, message)
-        state = user_conversations.get(test_user, {})
+        state = get_user_state(test_user)
 
         return {
             "message": message,
             "response": response,
             "response_length": len(response),
-            "state_keys": list(state.keys()),
-            "chat_history_length": len(state.get("chat_history", [])),
-            "drivers_count": len(state.get("drivers_with_full_details", [])),
-            "last_bot_response": state.get("last_bot_response", "")[:100] + "..."
+            "state_keys": list(state.to_dict().keys()),
+            "chat_history_length": len(state.chat_history),
+            "drivers_count": len(state.all_fetched_drivers),
+            "trip_details": {
+                "trip_id": state.trip_id,
+                "pickup": state.pickup_location,
+                "drop": state.drop_location,
+                "start_date": state.start_date,
+                "end_date": state.end_date,
+            },
+            "last_bot_response": state.last_bot_response[:100] + "..." if state.last_bot_response and len(state.last_bot_response) > 100 else state.last_bot_response
         }
     except Exception as e:
         return {"error": str(e)}
@@ -390,10 +431,15 @@ async def debug_user(user_id: str):
         state = user_conversations[user_id]
         return {
             "user_id": user_id,
-            "messages": len(state.get("chat_history", [])),
-            "drivers": len(state.get("drivers_with_full_details", [])),
-            "pickup": state.get("pickup_location"),
-            "last_response": state.get("last_bot_response", "")[:200] + "...",
+            "messages": len(state.chat_history),
+            "drivers": len(state.all_fetched_drivers),
+            "pickup": state.pickup_location,
+            "drop": state.drop_location,
+            "trip_id": state.trip_id,
+            "start_date": state.start_date,
+            "end_date": state.end_date,
+            "customer_name": state.customer_name,
+            "last_response": state.last_bot_response[:200] + "..." if state.last_bot_response and len(state.last_bot_response) > 200 else state.last_bot_response,
             "processed_messages_count": len(processed_messages)
         }
     return {"error": "User not found"}
@@ -439,15 +485,15 @@ if __name__ == "__main__":
 
     # Check environment
     if not os.environ.get("SLACK_BOT_TOKEN"):
-        print("❌ Set SLACK_BOT_TOKEN environment variable")
-        print("   export SLACK_BOT_TOKEN='xoxb-your-token'")
-        # For the app endpoint, we don't strictly need the slack token,
-        # but other parts of the app might.
-        # So we'll leave this check in.
-        # exit(1) # You can comment this out if you are not using slack
+        print("⚠️ SLACK_BOT_TOKEN not set. Slack integration will not work.")
+        print("   For Slack integration: export SLACK_BOT_TOKEN='xoxb-your-token'")
+        print("   Web API will still work without Slack token.\n")
 
     print("🚀 Starting Cab Booking Bot API")
 
     port = int(os.environ.get("PORT", 8080))
     print(f"📍 Server running on: http://localhost:{port}")
+    print(f"📊 Test the agent: http://localhost:{port}/test_agent/I need a cab from Delhi to Mumbai")
+    print(f"💬 Chat API endpoint: http://localhost:{port}/chat")
+
     uvicorn.run(app, host="0.0.0.0", port=port)
