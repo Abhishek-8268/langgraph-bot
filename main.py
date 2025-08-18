@@ -18,7 +18,7 @@ from models.state_model import ConversationState
 from services.redis_service import redis_manager
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=getattr(logging, "WARNING"))
 logger = logging.getLogger(__name__)
 
 
@@ -287,41 +287,121 @@ async def process_message_async(user_id: str, message: str, customer_details: di
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
 
 
+
 def parse_driver_string(response_str: str) -> Dict[str, Any]:
     """Parses the string representation of drivers into a structured dictionary."""
     drivers = []
-    blocks = response_str.strip().split('\n\n')
-
     suggestion = ""
-    driver_blocks = []
 
-    for block in blocks:
-        if "Driver Name:" in block:
-            driver_blocks.append(block)
-        else:
-            suggestion = block.strip()
+    # First, check if there's a clear suggestion section
+    # Look for common suggestion patterns
+    suggestion_patterns = [
+        "Here are 5 drivers",
+        "Here are drivers",
+        "Want me to check",
+        "Tip:",
+        "You can also",
+        "Would you like"
+    ]
 
-    for block in driver_blocks:
-        driver = {}
-        lines = block.strip().split('\n')
+    # Split the response into lines for processing
+    lines = response_str.strip().split('\n')
 
-        try:
-            driver['name'] = lines[0].replace('Driver Name:', '').strip()
-        except IndexError:
+    current_driver = None
+    driver_section_active = False
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        # Skip empty lines
+        if not line:
+            # If we have a current driver, save it before moving on
+            if current_driver and 'name' in current_driver:
+                drivers.append(current_driver)
+                current_driver = None
+                driver_section_active = False
             continue
 
-        for line in lines[1:]:
-            line = line.replace('•', '').strip()
-            if ':' in line:
-                key, value = line.split(':', 1)
-                key = key.strip().lower().replace(' ', '_').replace('per_km', 'price_per_km')
-                driver[key] = value.strip()
-        drivers.append(driver)
+        # Check if this line starts a new driver entry
+        if line.startswith("Driver Name:"):
+            # Save previous driver if exists
+            if current_driver and 'name' in current_driver:
+                drivers.append(current_driver)
 
-    return {"drivers": drivers, "suggestion": suggestion}
+            # Start new driver
+            current_driver = {}
+            driver_section_active = True
+            current_driver['name'] = line.replace("Driver Name:", "").strip()
+
+        # If we're in a driver section, process driver fields
+        elif driver_section_active and line.startswith("•"):
+            if current_driver is not None:
+                line = line.replace('•', '').strip()
+                if ':' in line:
+                    # Check if this line contains suggestion text (shouldn't be in driver fields)
+                    if any(pattern.lower() in line.lower() for pattern in suggestion_patterns):
+                        # This is actually the suggestion, not a driver field
+                        suggestion = line
+                        driver_section_active = False
+                    else:
+                        key, value = line.split(':', 1)
+                        key = key.strip().lower().replace(' ', '_')
+
+                        # Fix the key names
+                        if key == 'price_per_km':
+                            key = 'price_per_km'
+                        elif key == 'car_name':
+                            key = 'car_name'
+                        elif key == 'profile_url':
+                            key = 'profile_url'
+                        elif key == 'driver_id':
+                            key = 'driver_id'
+                        elif key == 'profile_image':
+                            key = 'profile_image'
+                        elif key == 'lastaccess':
+                            key = 'lastaccess'
+                        elif key == 'mobileno':
+                            key = 'mobileno'
+
+                        current_driver[key] = value.strip()
+
+        # Check if this line is the suggestion (not part of driver info)
+        elif any(pattern in line for pattern in suggestion_patterns):
+            # Save current driver if exists
+            if current_driver and 'name' in current_driver:
+                drivers.append(current_driver)
+                current_driver = None
+                driver_section_active = False
+
+            # Collect all remaining lines as suggestion
+            suggestion_lines = [line]
+            for j in range(i + 1, len(lines)):
+                if lines[j].strip():
+                    suggestion_lines.append(lines[j].strip())
+            suggestion = " ".join(suggestion_lines)
+            break
+
+    # Save last driver if exists
+    if current_driver and 'name' in current_driver:
+        drivers.append(current_driver)
+
+    # Clean up drivers - remove any fields that contain suggestion text
+    cleaned_drivers = []
+    for driver in drivers:
+        cleaned_driver = {}
+        for key, value in driver.items():
+            # Check if this field accidentally contains the suggestion
+            if isinstance(value, str) and any(pattern.lower() in value.lower() for pattern in suggestion_patterns):
+                # Don't include this field, it's part of the suggestion
+                if not suggestion:
+                    suggestion = value
+            else:
+                cleaned_driver[key] = value
+        cleaned_drivers.append(cleaned_driver)
+
+    return {"drivers": cleaned_drivers, "suggestion": suggestion}
 
 
-# --- API Endpoint for App Integration ---
 @app.post("/chat")
 async def chat_with_bot(chat_request: ChatRequest):
     """
@@ -337,9 +417,21 @@ async def chat_with_bot(chat_request: ChatRequest):
 
     response = await process_message_async(chat_request.user_id, chat_request.message, customer_details)
 
+    # Check if response contains driver listing pattern
     if "Driver Name:" in response and "• City:" in response:
-        response_json = parse_driver_string(response)
-        return {"response": response_json, "type": "driverList"}
+        # Parse the driver list
+        parsed_response = parse_driver_string(response)
+
+        # Ensure we have a valid structure
+        if not parsed_response.get("suggestion"):
+            # Extract suggestion from response if it wasn't properly parsed
+            lines = response.split('\n')
+            for line in reversed(lines):
+                if any(keyword in line for keyword in ["Here are", "Want me to check", "Tip:", "You can also"]):
+                    parsed_response["suggestion"] = line.strip()
+                    break
+
+        return {"response": parsed_response, "type": "driverList"}
     else:
         return {"response": response, "type": "text"}
 
