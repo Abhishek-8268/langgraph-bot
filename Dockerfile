@@ -17,5 +17,11 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
+# Default environment variables (can be overridden)
+ENV REDIS_HOST=localhost
+ENV REDIS_PORT=6379
+ENV SESSION_TTL_HOURS=1
+ENV REDIS_MAX_CONNECTIONS=50
+
 # Run application
 CMD ["uv", "run", "python", "main.py"]

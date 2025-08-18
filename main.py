@@ -1,20 +1,55 @@
 import os
-import signal
+import asyncio
 from typing import Optional, Dict, Any
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from slack_sdk import WebClient
+from slack_sdk.web.async_client import AsyncWebClient
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import traceback
+from datetime import datetime
+from contextlib import asynccontextmanager
+import logging
 
 # Import your agent and state model
 from langgraph_agent.graph.builder import app as cab_agent
 from models.state_model import ConversationState
+from services.redis_service import redis_manager
 
-# Simple setup
-app = FastAPI(title="Cab Booking Bot")
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+# Lifecycle management for Redis
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle - initialize and cleanup Redis"""
+    # Startup
+    logger.info("🚀 Starting up - initializing Redis connection...")
+    await redis_manager.initialize()
+
+    # Check Redis health
+    health = await redis_manager.health_check()
+    if health.get("redis_available"):
+        logger.info(f"✅ Redis connected: {health.get('status')}")
+    else:
+        logger.warning("⚠️ Redis not available - using fallback storage")
+
+    yield
+
+    # Shutdown
+    logger.info("🔚 Shutting down - closing Redis connections...")
+    await redis_manager.close()
+
+
+# Initialize FastAPI with lifespan
+app = FastAPI(title="Cab Booking Bot", lifespan=lifespan)
+
+# Initialize Slack clients
 slack_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+async_slack_client = AsyncWebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,9 +63,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simple in-memory storage (for demo - use Redis/DB in production)
-user_conversations: Dict[str, ConversationState] = {}
-processed_messages = set()  # Track processed messages to avoid duplicates
+# Fallback in-memory storage for when Redis is unavailable
+fallback_storage: Dict[str, ConversationState] = {}
 
 
 # --- Pydantic model for the /chat endpoint ---
@@ -43,92 +77,129 @@ class ChatRequest(BaseModel):
     customer_phone: Optional[str] = None
 
 
-def get_user_state(user_id: str) -> ConversationState:
-    """Get or create user conversation state using Pydantic model"""
-    if user_id not in user_conversations:
-        # Create new state using Pydantic model
-        user_conversations[user_id] = ConversationState(
-            chat_history=[],
-            all_fetched_drivers=[],
-            filtered_drivers=[],
-            applied_filters={},
-            current_display_index=0,
-            current_page=1,
-            fetch_count=0,
-            trip_id=None,
-            pickup_location=None,
-            drop_location=None,
-            trip_type=None,
-            start_date=None,
-            end_date=None,
-            customer_id=None,
-            customer_name=None,
-            customer_phone=None,
-            customer_profile=None,
-            last_bot_response=None,
-            tool_calls=[]
-        )
-    return user_conversations[user_id]
+async def get_user_state(user_id: str, customer_details: dict = None) -> ConversationState:
+    """Get or create user conversation state with async Redis integration"""
+
+    # First, try to get from Redis
+    state = await redis_manager.get_session(user_id)
+
+    if state:
+        # Session exists in Redis
+        logger.info(f"✅ Found existing session for {user_id}")
+
+        # Update customer details if provided and changed
+        if customer_details:
+            updated = False
+            if customer_details.get("customer_id") and state.customer_id != customer_details["customer_id"]:
+                state.customer_id = customer_details["customer_id"]
+                updated = True
+            if customer_details.get("customer_name") and state.customer_name != customer_details["customer_name"]:
+                state.customer_name = customer_details["customer_name"]
+                updated = True
+            if customer_details.get("customer_phone") and state.customer_phone != customer_details["customer_phone"]:
+                state.customer_phone = customer_details["customer_phone"]
+                updated = True
+            if customer_details.get("customer_profile") and state.customer_profile != customer_details["customer_profile"]:
+                state.customer_profile = customer_details["customer_profile"]
+                updated = True
+
+            if updated:
+                await redis_manager.save_session(user_id, state)
+
+        return state
+
+    # No session in Redis, check fallback storage
+    if user_id in fallback_storage:
+        logger.info(f"📦 Using fallback storage for {user_id}")
+        return fallback_storage[user_id]
+
+    # Create new session
+    logger.info(f"🆕 Creating new session for {user_id}")
+    new_state = ConversationState(
+        chat_history=[],
+        all_fetched_drivers=[],
+        filtered_drivers=[],
+        applied_filters={},
+        current_display_index=0,
+        current_page=1,
+        fetch_count=0,
+        trip_id=None,
+        pickup_location=None,
+        drop_location=None,
+        trip_type=None,
+        start_date=None,
+        end_date=None,
+        customer_id=customer_details.get("customer_id") if customer_details else None,
+        customer_name=customer_details.get("customer_name") if customer_details else None,
+        customer_phone=customer_details.get("customer_phone") if customer_details else None,
+        customer_profile=customer_details.get("customer_profile") if customer_details else None,
+        last_bot_response=None,
+        tool_calls=[]
+    )
+
+    # Save to Redis
+    if not await redis_manager.save_session(user_id, new_state):
+        # If Redis save fails, use fallback storage
+        logger.warning(f"⚠️ Redis save failed, using fallback storage for {user_id}")
+        fallback_storage[user_id] = new_state
+
+    return new_state
 
 
-def is_duplicate_message(event: dict) -> bool:
-    """Check if this event was already processed using multiple identifiers"""
+async def save_user_state(user_id: str, state: ConversationState) -> bool:
+    """Save user state to Redis with fallback"""
+    success = await redis_manager.save_session(user_id, state)
+
+    if not success:
+        # Fallback to in-memory storage
+        logger.warning(f"⚠️ Using fallback storage to save state for {user_id}")
+        fallback_storage[user_id] = state
+
+    return success
+
+
+async def clear_user_session(user_id: str) -> bool:
+    """Clear user session from Redis and fallback storage"""
+    redis_deleted = await redis_manager.delete_session(user_id)
+
+    # Also clear from fallback storage
+    if user_id in fallback_storage:
+        del fallback_storage[user_id]
+
+    return redis_deleted
+
+
+async def is_duplicate_message(event: dict) -> bool:
+    """Check if this event was already processed using Redis-backed deduplication"""
     user_id = event.get("user")
     text = event.get("text", "").strip()
     timestamp = event.get("ts", "")
-    event_ts = event.get("event_ts", "")
 
-    # Create multiple unique identifiers
-    identifiers = [
-        f"{user_id}:{text}:{timestamp}",
-        f"{user_id}:{timestamp}",
-        f"event:{event_ts}" if event_ts else None
-    ]
-
-    # Remove None values
-    identifiers = [id for id in identifiers if id]
-
-    # Check if any identifier was already processed
-    for identifier in identifiers:
-        if identifier in processed_messages:
-            print(f"🔄 Duplicate detected: {identifier}")
-            return True
-
-    # Add all identifiers to processed set
-    for identifier in identifiers:
-        processed_messages.add(identifier)
-
-    # Keep only last 200 messages to prevent memory leak
-    if len(processed_messages) > 200:
-        # Keep only the newest 100
-        new_set = set(list(processed_messages)[-100:])
-        processed_messages.clear()
-        processed_messages.update(new_set)
+    # Use Redis for duplicate checking
+    if await redis_manager.is_duplicate_message(user_id, text, timestamp):
+        logger.info(f"🔄 Duplicate detected (Redis): {user_id}:{text}")
+        return True
 
     return False
 
 
-def process_message(user_id: str, message: str, customer_details: dict = {}) -> str:
-    """Process user message through cab agent with Pydantic state management"""
-    print(f"🔄 Processing for {user_id}: {message}")
+async def process_message_async(user_id: str, message: str, customer_details: dict = {}) -> str:
+    """Process user message through cab agent with async Redis-backed state management"""
+    logger.info(f"🔄 Processing for {user_id}: {message}")
 
-    # Get user state (Pydantic model)
-    state_model = get_user_state(user_id)
-
-    # Update customer details if provided
-    if customer_details:
-        state_model.customer_id = customer_details.get("customer_id")
-        state_model.customer_name = customer_details.get("customer_name")
-        state_model.customer_profile = customer_details.get("customer_profile")
-        state_model.customer_phone = customer_details.get("customer_phone")
+    # Get user state from Redis/fallback
+    state_model = await get_user_state(user_id, customer_details)
 
     # Handle simple commands
     if message.lower().strip() == "reset":
-        # Clear the specific user's conversation
-        if user_id in user_conversations:
-            # Reset the state using Pydantic model's reset method
-            user_conversations[user_id].reset()
+        # Clear the session from Redis
+        await clear_user_session(user_id)
         return "🔄 Reset! Let's start fresh. Where would you like to travel?"
+
+    # Check if session is expired (no trip_id and empty chat history)
+    if not state_model.trip_id and len(state_model.chat_history) == 0:
+        # This is essentially a new session
+        logger.info(f"📝 Starting fresh session for {user_id}")
 
     # Add message to chat history
     state_model.chat_history.append(HumanMessage(content=message))
@@ -136,30 +207,23 @@ def process_message(user_id: str, message: str, customer_details: dict = {}) -> 
     # Convert Pydantic model to dict for the agent
     state_dict = state_model.to_dict()
 
-    # Process through your existing agent with timeout
+    # Process through agent in executor (since it's sync)
     try:
-        print(f"🤖 Invoking agent...")
+        logger.info(f"🤖 Invoking agent...")
 
-        # Set a timeout for the agent call
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Agent call timed out")
-
-        # Set timeout to 45 seconds
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(45)
-
-        try:
-            result = cab_agent.invoke(state_dict)
-        finally:
-            signal.alarm(0)  # Cancel the alarm
+        # Run the sync agent in a thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, cab_agent.invoke, state_dict),
+            timeout=45.0
+        )
 
         # Ensure result is valid
         if not isinstance(result, dict):
-            print(f"⚠️ Agent returned non-dict: {type(result)}")
+            logger.warning(f"⚠️ Agent returned non-dict: {type(result)}")
             return "Sorry, I had a technical issue. Please try again."
 
         # Update the Pydantic state model from the result
-        # We update only the fields that the agent might have modified
         state_model.chat_history = result.get("chat_history", state_model.chat_history)
         state_model.all_fetched_drivers = result.get("all_fetched_drivers", state_model.all_fetched_drivers)
         state_model.filtered_drivers = result.get("filtered_drivers", state_model.filtered_drivers)
@@ -176,7 +240,10 @@ def process_message(user_id: str, message: str, customer_details: dict = {}) -> 
         state_model.last_bot_response = result.get("last_bot_response", state_model.last_bot_response)
         state_model.tool_calls = result.get("tool_calls", state_model.tool_calls)
 
-        print(f"✅ State updated for {user_id}")
+        # Save updated state to Redis
+        await save_user_state(user_id, state_model)
+
+        logger.info(f"✅ State updated and saved for {user_id}")
 
         # Extract response with better fallbacks
         response = None
@@ -184,7 +251,7 @@ def process_message(user_id: str, message: str, customer_details: dict = {}) -> 
         # Try 1: Direct last_bot_response
         if state_model.last_bot_response:
             response = state_model.last_bot_response
-            print(f"📤 Got direct response: {response[:50] if len(response) > 50 else response}...")
+            logger.info(f"📤 Got direct response: {response[:50] if len(response) > 50 else response}...")
 
         # Try 2: Last AI message from chat history
         if not response:
@@ -192,27 +259,30 @@ def process_message(user_id: str, message: str, customer_details: dict = {}) -> 
                 if hasattr(msg, 'content') and 'AI' in str(type(msg)):
                     if msg.content and msg.content.strip():
                         response = msg.content
-                        print(f"📤 Got AI message: {response[:50] if len(response) > 50 else response}...")
+                        logger.info(f"📤 Got AI message: {response[:50] if len(response) > 50 else response}...")
                         break
 
         # Try 3: Check if we have drivers and create a response
         if not response:
             if state_model.all_fetched_drivers:
                 response = f"I found {len(state_model.all_fetched_drivers)} drivers for you. Please let me know what specific information you'd like about them."
-                print(f"📤 Generated fallback response")
+                logger.info(f"📤 Generated fallback response")
 
         # Final fallback
         if not response or not response.strip():
             response = "I'm here to help you find drivers! Please tell me your pickup location or what you're looking for."
-            print(f"📤 Using final fallback response")
+            logger.info(f"📤 Using final fallback response")
+
+        # Extend session TTL on successful interaction
+        await redis_manager.extend_session(user_id)
 
         return response
 
-    except TimeoutError:
-        print(f"⏰ Agent call timed out for {user_id}")
+    except asyncio.TimeoutError:
+        logger.error(f"⏰ Agent call timed out for {user_id}")
         return "Sorry, that request is taking too long. Please try again with a simpler query or type 'reset'."
     except Exception as e:
-        print(f"❌ Error processing message: {e}")
+        logger.error(f"❌ Error processing message: {e}")
         traceback.print_exc()
         return "Sorry, I had an issue processing your request. Please try again or type 'reset'."
 
@@ -220,13 +290,11 @@ def process_message(user_id: str, message: str, customer_details: dict = {}) -> 
 def parse_driver_string(response_str: str) -> Dict[str, Any]:
     """Parses the string representation of drivers into a structured dictionary."""
     drivers = []
-    # Split the response by double newlines to separate driver blocks and the suggestion text
     blocks = response_str.strip().split('\n\n')
 
     suggestion = ""
     driver_blocks = []
 
-    # Separate driver blocks from the suggestion text
     for block in blocks:
         if "Driver Name:" in block:
             driver_blocks.append(block)
@@ -237,13 +305,11 @@ def parse_driver_string(response_str: str) -> Dict[str, Any]:
         driver = {}
         lines = block.strip().split('\n')
 
-        # First line is always "Driver Name: ..."
         try:
             driver['name'] = lines[0].replace('Driver Name:', '').strip()
         except IndexError:
-            continue  # Skip empty blocks
+            continue
 
-        # Other lines are "• Key: Value"
         for line in lines[1:]:
             line = line.replace('•', '').strip()
             if ':' in line:
@@ -260,7 +326,7 @@ def parse_driver_string(response_str: str) -> Dict[str, Any]:
 async def chat_with_bot(chat_request: ChatRequest):
     """
     Handles a chat message from a user and returns the bot's response.
-    Maintains conversation context using user_id.
+    Maintains conversation context using async Redis-backed sessions.
     """
     customer_details = {
         "customer_id": chat_request.customer_id,
@@ -268,34 +334,30 @@ async def chat_with_bot(chat_request: ChatRequest):
         "customer_profile": chat_request.customer_profile,
         "customer_phone": chat_request.customer_phone,
     }
-    response = process_message(chat_request.user_id, chat_request.message, customer_details)
 
-    # Check if the response contains driver details to parse it
+    response = await process_message_async(chat_request.user_id, chat_request.message, customer_details)
+
     if "Driver Name:" in response and "• City:" in response:
         response_json = parse_driver_string(response)
         return {"response": response_json, "type": "driverList"}
     else:
-        # Otherwise, return the plain text response
         return {"response": response, "type": "text"}
 
 
 @app.post("/slack/events")
 async def handle_slack_events(request: Request):
-    """Handle Slack events - FIXED for multi-user access"""
+    """Handle Slack events with async Redis-backed session management"""
     data = await request.json()
 
-    # URL verification
     if "challenge" in data:
         return {"challenge": data["challenge"]}
 
-    # Handle messages
     event = data.get("event", {})
     if (event.get("type") == "message" and
             "bot_id" not in event and
             "subtype" not in event):
 
-        # Skip if duplicate event
-        if is_duplicate_message(event):
+        if await is_duplicate_message(event):
             return {"status": "ok"}
 
         user_id = event.get("user")
@@ -303,87 +365,66 @@ async def handle_slack_events(request: Request):
         text = event.get("text", "").strip()
         channel_type = event.get("channel_type", "")
 
-        # Skip if no text
         if not text:
             return {"status": "ok"}
 
-        print(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
+        logger.info(f"📨 Processing: {user_id} -> {text} (channel: {channel}, type: {channel_type})")
 
         # Send immediate acknowledgment for search queries
         if any(keyword in text.lower() for keyword in ['driver', 'cab', 'jaipur', 'delhi', 'mumbai', 'find', 'book']):
             try:
-                # Try to send acknowledgment
-                slack_client.chat_postMessage(
+                await async_slack_client.chat_postMessage(
                     channel=channel,
                     text=f"🚗 Thinking...",
                     as_user=False,
                     username="Cab Bot"
                 )
-                print("📤 Sent immediate acknowledgment")
+                logger.info("📤 Sent immediate acknowledgment")
             except Exception as ack_error:
-                print(f"⚠️ Failed to send acknowledgment: {ack_error}")
+                logger.warning(f"⚠️ Failed to send acknowledgment: {ack_error}")
 
-        # Process message (this is the slow part)
-        response = process_message(user_id, text)
+        # Process message asynchronously
+        response = await process_message_async(user_id, text)
 
-        # Ensure we have a valid response
         if not response or not response.strip():
             response = "I'm here to help you find drivers! Please tell me your pickup location."
 
-        # Send final response with multiple fallback strategies
+        # Try to send response
         success = False
 
-        # Strategy 1: Try original channel
         try:
-            slack_client.chat_postMessage(
+            await async_slack_client.chat_postMessage(
                 channel=channel,
                 text=f"🚗 {response}"
             )
-            print(f"✅ Sent response to channel {channel}")
+            logger.info(f"✅ Sent response to channel {channel}")
             success = True
         except Exception as e:
-            print(f"❌ Failed to send to channel {channel}: {e}")
+            logger.error(f"❌ Failed to send to channel {channel}: {e}")
 
-        # Strategy 2: If channel failed, try user DM with conversation
         if not success:
             try:
-                dm_response = slack_client.conversations_open(users=[user_id])
+                dm_response = await async_slack_client.conversations_open(users=[user_id])
                 if dm_response["ok"]:
                     dm_channel = dm_response["channel"]["id"]
-                    slack_client.chat_postMessage(
+                    await async_slack_client.chat_postMessage(
                         channel=dm_channel,
                         text=f"🚗 {response}\n\n_Note: I'm replying here because I don't have access to send messages in the other channel._"
                     )
-                    print(f"✅ Sent as DM to {user_id} via opened conversation")
+                    logger.info(f"✅ Sent as DM to {user_id} via opened conversation")
                     success = True
-                else:
-                    print(f"❌ Failed to open DM with {user_id}: {dm_response}")
             except Exception as dm_error:
-                print(f"❌ Failed to send DM via conversation: {dm_error}")
+                logger.error(f"❌ Failed to send DM: {dm_error}")
 
-        # Strategy 3: Last resort - try direct user ID
         if not success:
-            try:
-                slack_client.chat_postMessage(
-                    channel=user_id,
-                    text=f"🚗 {response}\n\n_Note: Having trouble with channel permissions. You might need to add me to the channel or your admin needs to update my permissions._"
-                )
-                print(f"✅ Sent as direct DM to {user_id}")
-                success = True
-            except Exception as direct_error:
-                print(f"❌ Failed direct DM: {direct_error}")
-
-        # Strategy 4: If all else fails, log the issue
-        if not success:
-            print(f"❌ COMPLETE FAILURE to send message to user {user_id}")
-            print(f"   Response was: {response[:100]}...")
+            logger.error(f"❌ Complete failure to send message to user {user_id}")
 
     return {"status": "ok"}
 
 
 @app.post("/slack/commands")
 async def handle_slash_commands(request: Request):
-    """Handle /cab slash command"""
+    """Handle /cab slash command with async Redis sessions"""
     form_data = await request.form()
     user_id = form_data.get("user_id")
     text = form_data.get("text", "").strip()
@@ -391,7 +432,7 @@ async def handle_slash_commands(request: Request):
     if not text:
         response = "🚗 Tell me your pickup location!\nExample: `/cab I need drivers in Jaipur`"
     else:
-        response = process_message(user_id, text)
+        response = await process_message_async(user_id, text)
 
     return {"text": f"🚗 {response}"}
 
@@ -401,8 +442,8 @@ async def test_agent_directly(message: str):
     """Test the agent directly without Slack to debug issues"""
     try:
         test_user = "test_user"
-        response = process_message(test_user, message)
-        state = get_user_state(test_user)
+        response = await process_message_async(test_user, message)
+        state = await get_user_state(test_user)
 
         return {
             "message": message,
@@ -426,11 +467,14 @@ async def test_agent_directly(message: str):
 
 @app.get("/debug/{user_id}")
 async def debug_user(user_id: str):
-    """Debug user state"""
-    if user_id in user_conversations:
-        state = user_conversations[user_id]
+    """Debug user state from Redis"""
+    state = await get_user_state(user_id)
+
+    if state:
+        session_info = await redis_manager.get_session_info(user_id)
         return {
             "user_id": user_id,
+            "session_info": session_info,
             "messages": len(state.chat_history),
             "drivers": len(state.all_fetched_drivers),
             "pickup": state.pickup_location,
@@ -440,34 +484,85 @@ async def debug_user(user_id: str):
             "end_date": state.end_date,
             "customer_name": state.customer_name,
             "last_response": state.last_bot_response[:200] + "..." if state.last_bot_response and len(state.last_bot_response) > 200 else state.last_bot_response,
-            "processed_messages_count": len(processed_messages)
         }
-    return {"error": "User not found"}
+    return {"error": "User session not found"}
+
+
+@app.get("/sessions")
+async def get_all_sessions():
+    """Get information about all active sessions"""
+    active_users = await redis_manager.get_all_active_sessions()
+    sessions_info = []
+
+    for user_id in active_users:
+        info = await redis_manager.get_session_info(user_id)
+        if info:
+            sessions_info.append(info)
+
+    redis_health = await redis_manager.health_check()
+
+    return {
+        "total_active_sessions": len(active_users),
+        "sessions": sessions_info,
+        "fallback_storage_users": len(fallback_storage),
+        "redis_health": redis_health
+    }
+
+
+@app.delete("/session/{user_id}")
+async def delete_session(user_id: str):
+    """Manually delete a user session"""
+    deleted = await clear_user_session(user_id)
+    return {
+        "user_id": user_id,
+        "deleted": deleted,
+        "message": "Session cleared successfully" if deleted else "Session not found or deletion failed"
+    }
 
 
 @app.get("/clear_cache")
 async def clear_cache():
-    """Clear message cache and user states (for debugging)"""
-    global processed_messages, user_conversations
-    processed_messages.clear()
-    user_conversations.clear()
-    return {"status": "Cache cleared"}
+    """Clear all sessions and caches (for debugging)"""
+    # Get all active sessions
+    active_users = await redis_manager.get_all_active_sessions()
+    cleared_count = 0
+
+    for user_id in active_users:
+        if await clear_user_session(user_id):
+            cleared_count += 1
+
+    # Clear fallback storage
+    fallback_count = len(fallback_storage)
+    fallback_storage.clear()
+
+    return {
+        "status": "Cache cleared",
+        "redis_sessions_cleared": cleared_count,
+        "fallback_storage_cleared": fallback_count
+    }
 
 
 @app.get("/")
 async def home():
-    """Simple status page"""
+    """Simple status page with Redis info"""
+    redis_health = await redis_manager.health_check()
+    active_sessions = await redis_manager.get_all_active_sessions()
+
     return {
         "status": "running",
         "bot": "Cab Booking Assistant",
-        "active_users": len(user_conversations),
-        "processed_messages": len(processed_messages),
+        "active_sessions": len(active_sessions),
+        "fallback_storage_users": len(fallback_storage),
+        "redis_status": redis_health.get("status"),
+        "redis_available": redis_health.get("redis_available"),
         "endpoints": {
             "chat": "/chat (POST)",
             "slack_events": "/slack/events (POST)",
             "slack_commands": "/slack/commands (POST)",
             "test_agent": "/test_agent/{message} (GET)",
             "debug": "/debug/{user_id} (GET)",
+            "sessions": "/sessions (GET)",
+            "delete_session": "/session/{user_id} (DELETE)",
             "clear_cache": "/clear_cache (GET)",
             "health": "/health (GET)"
         }
@@ -476,8 +571,14 @@ async def home():
 
 @app.get("/health")
 async def health():
-    """Health check"""
-    return {"status": "healthy"}
+    """Health check with Redis status"""
+    redis_health = await redis_manager.health_check()
+
+    return {
+        "status": "healthy",
+        "redis": redis_health,
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 if __name__ == "__main__":
@@ -489,11 +590,12 @@ if __name__ == "__main__":
         print("   For Slack integration: export SLACK_BOT_TOKEN='xoxb-your-token'")
         print("   Web API will still work without Slack token.\n")
 
-    print("🚀 Starting Cab Booking Bot API")
+    print("\n🚀 Starting Cab Booking Bot API with Async Redis Session Management")
 
     port = int(os.environ.get("PORT", 8080))
     print(f"📍 Server running on: http://localhost:{port}")
     print(f"📊 Test the agent: http://localhost:{port}/test_agent/I need a cab from Delhi to Mumbai")
     print(f"💬 Chat API endpoint: http://localhost:{port}/chat")
+    print(f"📈 View active sessions: http://localhost:{port}/sessions")
 
     uvicorn.run(app, host="0.0.0.0", port=port)
