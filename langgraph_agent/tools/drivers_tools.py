@@ -283,6 +283,7 @@ def check_driver_availability(
     start_date: str,
     end_date: str,
     customer_details: Dict[str, str],
+    user_filters: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Checks the availability of a list of drivers for the current trip.
@@ -296,6 +297,7 @@ def check_driver_availability(
         end_date: end date of the trip in mm/dd/yy format (same as start_date for one-way trips)
         trip_type: The type of trip (e.g., 'one-way').
         customer_details: A dictionary containing customer's id, name, phone, and profile_image.
+        user_filters: A dictionary containing user's filters for availability check.
 
     Returns:
         A dictionary with the result of the availability check.
@@ -315,7 +317,7 @@ def check_driver_availability(
     logger.info(f"Sending availability request with trip details: {trip_details}")
 
     response = api_client.send_availability_request(
-        trip_id, driver_ids, trip_details, customer_details
+        trip_id, driver_ids, trip_details, customer_details, user_filters
     )
 
     if not response:

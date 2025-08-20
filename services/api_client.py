@@ -127,11 +127,18 @@ def send_availability_request(
     driver_ids: List[str],
     trip_details: Dict[str, Any],
     customer_details: Dict[str, Any],
+    user_filters: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """
     Send availability request with Pydantic validation
     """
     try:
+        for k, v in user_filters.items():
+            if v == True:
+                user_filters[k] = "true"
+            elif v == False:
+                user_filters[k] = "false"
+
         # Use the actual driver_ids passed, not hardcoded ones
         payload = {
             "driverIds": ["NewcOnEO5DdiDkhKwc8LjGapICB3"],
@@ -146,6 +153,7 @@ def send_availability_request(
                 "message": "Please confirm your availability for this trip.",
             },
             "tripId": trip_id,
+            "userFilters": user_filters,
         }
 
         logger.info(f"Sending availability request. Trip ID: {trip_id}")

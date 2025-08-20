@@ -178,6 +178,8 @@ def prepare_tool_arguments(tool_name: str, tool_args: Dict[str, Any], state: dic
         logger.info(f"Creating trip with dates - Start: {args.get('start_date')}, Return: {args.get('return_date')}")
 
     elif tool_name == "check_driver_availability":
+        all_drivers = state.get("all_fetched_drivers", [])
+        args["driver_ids"] = [driver["id"] for driver in all_drivers]
         args["trip_id"] = state.get("trip_id")
         args["pickup_location"] = state.get("pickup_location")
         args["drop_location"] = state.get("drop_location")
@@ -188,6 +190,7 @@ def prepare_tool_arguments(tool_name: str, tool_args: Dict[str, Any], state: dic
             "phone": state.get("customer_phone"),
             "profile_image": state.get("customer_profile", ""),
         }
+        args["user_filters"] = state.get("applied_filters", {})
 
         # Convert dates from YYYY-MM-DD to mm/dd/yy for availability API
         start_date = state.get("start_date")

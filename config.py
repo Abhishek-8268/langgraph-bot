@@ -16,7 +16,7 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 
 
 # Driver fetching configuration
-DRIVERS_PER_FETCH = 20  # Fetch 20 drivers at a time
+DRIVERS_PER_FETCH = 25  # Fetch 20 drivers at a time
 DRIVERS_PER_DISPLAY = 5  # Show 5 drivers at a time
 MAX_TOTAL_DRIVERS = 100  # Maximum 100 drivers per user (5 fetches)
 MAX_FETCH_DEPTH = 5  # Maximum 5 fetches per search
