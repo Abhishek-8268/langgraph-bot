@@ -1,20 +1,15 @@
 # langgraph_agent/graph/builder.py
-"""Simplified LangGraph agent builder using modular components"""
+"""Simplified LangGraph agent builder for new flow"""
 
 from typing import TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage
 
 
-# Define the state type for proper typing
+# Define the state type for proper typing - SIMPLIFIED for new flow
 class GraphState(TypedDict, total=False):
-    """State definition for the graph"""
+    """State definition for the graph - streamlined version"""
     chat_history: List[BaseMessage]
-    all_fetched_drivers: List[Dict[str, Any]]
-    filtered_drivers: List[Dict[str, Any]]
-    current_display_index: int
-    current_page: int
-    fetch_count: int
     applied_filters: Dict[str, Any]
     trip_id: Optional[str]
     pickup_location: Optional[str]
@@ -28,6 +23,8 @@ class GraphState(TypedDict, total=False):
     customer_profile: Optional[str]
     last_bot_response: Optional[str]
     tool_calls: List[Dict[str, Any]]
+    booking_status: Optional[str]
+    drivers_notified: int
 
 
 # Import and wrap node functions
@@ -36,13 +33,11 @@ from langgraph_agent.graph import nodes
 
 def agent_node_wrapper(state: GraphState) -> Dict[str, Any]:
     """Agent node wrapper with proper typing"""
-    # Convert TypedDict to regular dict for the node function
     return nodes.agent_node(dict(state))
 
 
 def tool_executor_node_wrapper(state: GraphState) -> Dict[str, Any]:
     """Tool executor node wrapper with proper typing"""
-    # Convert TypedDict to regular dict for the node function
     return nodes.tool_executor_node(dict(state))
 
 
@@ -56,7 +51,6 @@ def route_after_agent(state: GraphState) -> str:
 
 def create_graph():
     """Create the LangGraph workflow"""
-    # Use GraphState for proper typing
     workflow = StateGraph(GraphState)
 
     # Add nodes with wrapped functions

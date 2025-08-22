@@ -1,5 +1,5 @@
 # langgraph_agent/graph/nodes.py
-"""Graph nodes for the cab booking agent"""
+"""Refactored graph nodes for streamlined cab booking flow"""
 
 import json
 import logging
@@ -11,29 +11,19 @@ from langchain_google_vertexai import ChatVertexAI
 
 from langgraph_agent.graph.sys_prompt import bot_prompt
 from langgraph_agent.tools.drivers_tools import (
-    get_drivers_for_city,
-    get_driver_details,
-    remove_filters_from_search,
-    show_more_drivers,
-    create_trip,
-    check_driver_availability,
+    create_trip_and_check_availability,
 )
 import config
 
 logger = logging.getLogger(__name__)
 
-# Tools list
+# Tools list - simplified
 tools = [
-    get_drivers_for_city,
-    get_driver_details,
-    remove_filters_from_search,
-    show_more_drivers,
-    create_trip,
-    check_driver_availability,
+    create_trip_and_check_availability,
 ]
 
 # Initialize LLM
-llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.9)
+llm = ChatVertexAI(model="gemini-2.0-flash", temperature=0.7)
 llm_with_tools = llm.bind_tools(tools)
 
 
@@ -41,7 +31,7 @@ def agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Agent node that processes messages and decides actions"""
     logger.info("---AGENT NODE---")
 
-    # Get the current date to provide context to the LLM
+    # Get current date for context
     current_date_str = datetime.now().strftime("%Y-%m-%d")
     prompt_with_date = bot_prompt.format(current_date=current_date_str)
 
@@ -63,7 +53,7 @@ def agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         # Check if the response is an AIMessage and has tool_calls
         if isinstance(ai_response, AIMessage):
             if not ai_response.tool_calls:
-                # Direct response
+                # Direct response - agent is gathering info or responding
                 logger.info("Agent provided direct response")
                 return {
                     **state,
@@ -128,17 +118,30 @@ def tool_executor_node(state: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         try:
-            # Prepare tool arguments based on tool name
+            # Prepare tool arguments
             prepared_args = prepare_tool_arguments(tool_name, tool_args, state_updates)
 
-            # Execute the tool - use .func to call the underlying function
+            # Execute the tool
             output = tool_to_call.invoke(prepared_args)
 
             # Update state based on tool output
             update_state_from_tool_output(tool_name, output, prepared_args, state_updates)
 
             # Format output for LLM
-            output_str = format_tool_output(tool_name, output, state_updates)
+            if tool_name == "create_trip_and_check_availability":
+                if output.get("status") == "success":
+                    output_str = json.dumps({
+                        "status": "success",
+                        "message": "Trip created and availability request sent successfully",
+                        "trip_id": output.get("trip_id"),
+                        "drivers_notified": output.get("drivers_notified", 0),
+                        "details": "Drivers are being notified based on preferences"
+                    })
+                else:
+                    output_str = json.dumps(output)
+            else:
+                output_str = json.dumps(output) if isinstance(output, dict) else str(output)
+
             tool_messages.append(
                 ToolMessage(content=output_str, tool_call_id=tool_id, name=tool_name)
             )
@@ -147,7 +150,7 @@ def tool_executor_node(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.error(f"Error executing tool {tool_name}: {e}", exc_info=True)
             tool_messages.append(
                 ToolMessage(
-                    content=f"Error: An unexpected error occurred while running the tool '{tool_name}'.",
+                    content=f"Error: Failed to process your request. Please try again.",
                     tool_call_id=tool_id,
                     name=tool_name,
                 )
@@ -164,74 +167,21 @@ def prepare_tool_arguments(tool_name: str, tool_args: Dict[str, Any], state: dic
     """Prepare tool arguments with context from state"""
     args = tool_args.copy()
 
-    if tool_name == "get_driver_details":
-        args["drivers"] = state.get("all_fetched_drivers", [])
-
-    elif tool_name == "create_trip":
-        # Add customer details from state
+    if tool_name == "create_trip_and_check_availability":
+        # Add customer details from state - THESE SHOULD ALREADY BE IN STATE
         args["customer_details"] = {
             "id": state.get("customer_id"),
             "name": state.get("customer_name"),
             "phone": state.get("customer_phone"),
             "profile_image": state.get("customer_profile", ""),
         }
-        logger.info(f"Creating trip with dates - Start: {args.get('start_date')}, Return: {args.get('return_date')}")
 
-    elif tool_name == "check_driver_availability":
-        all_drivers = state.get("all_fetched_drivers", [])
-        args["driver_ids"] = [driver["id"] for driver in all_drivers]
-        args["trip_id"] = state.get("trip_id")
-        args["pickup_location"] = state.get("pickup_location")
-        args["drop_location"] = state.get("drop_location")
-        args["trip_type"] = state.get("trip_type")
-        args["customer_details"] = {
-            "id": state.get("customer_id"),
-            "name": state.get("customer_name"),
-            "phone": state.get("customer_phone"),
-            "profile_image": state.get("customer_profile", ""),
-        }
-        args["user_filters"] = state.get("applied_filters", {})
+        # Process filters if provided
+        if "filters" in args and args["filters"]:
+            args["filters"] = process_filter_values(args["filters"])
 
-        # Convert dates from YYYY-MM-DD to mm/dd/yy for availability API
-        start_date = state.get("start_date")
-        end_date = state.get("end_date")
-
-        if start_date:
-            try:
-                dt = datetime.strptime(start_date, "%Y-%m-%d")
-                args["start_date"] = dt.strftime("%m/%d/%y")
-            except:
-                args["start_date"] = datetime.now().strftime("%m/%d/%y")
-        else:
-            args["start_date"] = datetime.now().strftime("%m/%d/%y")
-
-        if end_date:
-            try:
-                dt = datetime.strptime(end_date, "%Y-%m-%d")
-                args["end_date"] = dt.strftime("%m/%d/%y")
-            except:
-                args["end_date"] = args["start_date"]
-        else:
-            args["end_date"] = args["start_date"]
-
-        logger.info(f"Checking availability with dates - Start: {args['start_date']}, End: {args['end_date']}")
-
-    elif tool_name == "get_drivers_for_city":
-        # Handle filters
-        current_filters = state.get("applied_filters", {})
-        new_filters = args.get("filters", {})
-
-        if new_filters:
-            processed_filters = process_filter_values(new_filters)
-            merged_filters = current_filters.copy()
-            merged_filters.update(processed_filters)
-            args["filters"] = merged_filters
-        elif current_filters:
-            args["filters"] = current_filters
-
-        # Set city from state if not provided
-        if "city" not in args and state.get("pickup_location"):
-            args["city"] = state["pickup_location"]
+        logger.info(f"Creating trip with customer: {args['customer_details']['name']}")
+        logger.info(f"Trip dates - Start: {args.get('start_date')}, Return: {args.get('return_date')}")
 
     return args
 
@@ -244,77 +194,21 @@ def update_state_from_tool_output(
 ) -> None:
     """Update state based on tool output"""
 
-    if tool_name == "create_trip":
-        if "error" not in output:
-            state["trip_id"] = output.get("tripId")
-            state["pickup_location"] = output.get("pickup_city")
+    if tool_name == "create_trip_and_check_availability":
+        if output.get("status") == "success":
+            # Store trip details in state
+            state["trip_id"] = output.get("trip_id")
+            state["pickup_location"] = tool_args.get("pickup_city")
             state["drop_location"] = tool_args.get("drop_city")
             state["trip_type"] = tool_args.get("trip_type")
-            state["start_date"] = output.get("start_date")
-            state["end_date"] = output.get("end_date")
+            state["start_date"] = tool_args.get("start_date")
+            state["end_date"] = tool_args.get("return_date") or tool_args.get("start_date")
+            state["applied_filters"] = tool_args.get("filters", {})
+            state["booking_status"] = "completed"
+            state["drivers_notified"] = output.get("drivers_notified", 0)
 
-            logger.info(f"Trip created. Stored dates - Start: {state['start_date']}, End: {state['end_date']}")
-
-            output["message"] = f"Trip created successfully from {tool_args.get('pickup_city')} to {tool_args.get('drop_city')}. Now I will find drivers for you."
-
-    elif tool_name == "get_drivers_for_city":
-        new_drivers = output.get("drivers", [])
-        page = output.get("page", 1)
-
-        # Update filters in state if they were applied
-        if tool_args.get("filters"):
-            state["applied_filters"] = tool_args["filters"]
-
-        # Update pickup location
-        if "city" in tool_args:
-            state["pickup_location"] = tool_args["city"]
-
-        if page == 1:
-            # New search or filter application
-            state["all_fetched_drivers"] = new_drivers
-            state["current_display_index"] = 0
-            state["fetch_count"] = 1
-            state["current_page"] = 1
-        else:
-            # Pagination
-            all_drivers = state.get("all_fetched_drivers", [])
-            all_drivers.extend(new_drivers)
-            state["all_fetched_drivers"] = all_drivers
-            state["fetch_count"] = state.get("fetch_count", 0) + 1
-            state["current_page"] = page
-
-        state["filtered_drivers"] = state["all_fetched_drivers"]
-
-        logger.info(
-            f"Applied filters: {state.get('applied_filters', {})} - "
-            f"Fetched {len(new_drivers)} drivers, total now: {len(state['all_fetched_drivers'])}"
-        )
-
-    elif tool_name == "show_more_drivers":
-        state["current_display_index"] = output.get("next_index", 0)
-        if output.get("should_fetch_new"):
-            current_page = state.get("current_page", 1)
-            if state.get("fetch_count", 0) < config.MAX_FETCH_DEPTH:
-                output["message"] = "need_more_drivers"
-                output["next_page"] = current_page + 1
-
-    elif tool_name == "remove_filters_from_search":
-        keys_to_remove = tool_args.get("keys_to_remove", [])
-        current_filters = state.get("applied_filters", {}).copy()
-
-        if "all" in keys_to_remove:
-            state["applied_filters"] = {}
-        else:
-            for key in keys_to_remove:
-                current_filters.pop(key, None)
-            state["applied_filters"] = current_filters
-
-        # Reset driver list after removing filters
-        state["all_fetched_drivers"] = []
-        state["filtered_drivers"] = []
-        state["current_display_index"] = 0
-        state["fetch_count"] = 0
-        state["current_page"] = 1
+            logger.info(f"Trip created successfully. ID: {state['trip_id']}")
+            logger.info(f"Notified {state['drivers_notified']} drivers")
 
 
 def process_filter_values(filters: Dict[str, Any]) -> Dict[str, Any]:
@@ -354,81 +248,3 @@ def process_filter_values(filters: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
     return processed
-
-
-def format_tool_output(tool_name: str, output: Any, state: dict) -> str:
-    """Format tool output for LLM consumption"""
-    if tool_name == "get_drivers_for_city":
-        all_drivers = state.get("all_fetched_drivers", [])
-        drivers_to_show = all_drivers[:config.DRIVERS_PER_DISPLAY]
-
-        if not drivers_to_show:
-            return json.dumps({"total_drivers_found": 0, "message": "No drivers found."})
-
-        summary = {
-            "total_drivers_fetched": len(all_drivers),
-            "showing_drivers": len(drivers_to_show),
-            "has_more": len(all_drivers) > config.DRIVERS_PER_DISPLAY,
-            "drivers": format_drivers_list(drivers_to_show),
-        }
-        return json.dumps(summary, indent=2)
-
-    elif tool_name == "show_more_drivers":
-        if output.get("message") == "need_more_drivers":
-            return json.dumps({"status": "need_fetch_more", "next_page": output.get("next_page")})
-
-        current_index = state.get("current_display_index", 0)
-        drivers_list = state.get("filtered_drivers", [])
-        drivers_to_show = drivers_list[current_index:current_index + config.DRIVERS_PER_DISPLAY]
-
-        summary = {
-            "showing_drivers": len(drivers_to_show),
-            "has_more": current_index + config.DRIVERS_PER_DISPLAY < len(drivers_list),
-            "drivers": format_drivers_list(drivers_to_show),
-        }
-        return json.dumps(summary, indent=2)
-
-    elif tool_name == "get_driver_details":
-        if not output:
-            return json.dumps({"error": "Driver not found"})
-        return json.dumps(format_drivers_list([output])[0], indent=2)
-
-    elif isinstance(output, (dict, list)):
-        return json.dumps(output, indent=2)
-    else:
-        return str(output)
-
-
-def format_drivers_list(drivers: List[Dict]) -> List[Dict]:
-    """Format driver list for display"""
-    formatted = []
-
-    for driver in drivers:
-        vehicle = {}
-        if driver.get("vehicles") and len(driver["vehicles"]) > 0:
-            first_vehicle = driver["vehicles"][0]
-            vehicle = {
-                "model": first_vehicle.get("model", "N/A"),
-                "type": first_vehicle.get("type", "N/A"),
-                "price_per_km": first_vehicle.get("per_km_cost", "N/A"),
-                "image_url": first_vehicle.get("image_url"),
-            }
-
-        formatted.append({
-            "id": driver.get("id"),
-            "name": driver.get("name"),
-            "phone": driver.get("phone"),
-            "username": driver.get("username"),
-            "profile_imagFalsee": driver.get("profile_image"),
-            "age": driver.get("age"),
-            "experience": driver.get("experience"),
-            "languages": driver.get("languages", []),
-            "is_pet_allowed": driver.get("is_pet_allowed"),
-            "is_married": driver.get("is_married"),
-            "city": driver.get("city"),
-            "vehicle": vehicle,
-            "lastAccess": driver.get("lastAccess"),
-            "vehicles": driver.get("vehicles", []),
-        })
-
-    return formatted

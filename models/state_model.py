@@ -1,5 +1,5 @@
 # models/state_model.py
-"""State management schema for the cab booking agent"""
+"""Simplified state management schema for the streamlined cab booking flow"""
 
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -7,22 +7,13 @@ from langchain_core.messages import BaseMessage
 
 
 class ConversationState(BaseModel):
-    """Complete state for a user's conversation"""
+    """Simplified state for user's conversation - removed driver tracking"""
     model_config = {"arbitrary_types_allowed": True}
 
     # Chat history
     chat_history: List[BaseMessage] = Field(default_factory=list)
 
-    # Driver data
-    all_fetched_drivers: List[Dict[str, Any]] = Field(default_factory=list)
-    filtered_drivers: List[Dict[str, Any]] = Field(default_factory=list)
-
-    # Pagination state
-    current_display_index: int = 0
-    current_page: int = 1
-    fetch_count: int = 0
-
-    # Applied filters
+    # Applied filters/preferences
     applied_filters: Dict[str, Any] = Field(default_factory=dict)
 
     # Trip details
@@ -43,15 +34,14 @@ class ConversationState(BaseModel):
     last_bot_response: Optional[str] = None
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
 
+    # Booking status
+    booking_status: Optional[str] = None  # "gathering_info", "collecting_preferences", "processing", "completed"
+    drivers_notified: int = 0
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for graph state"""
         return {
             "chat_history": self.chat_history,
-            "all_fetched_drivers": self.all_fetched_drivers,
-            "filtered_drivers": self.filtered_drivers,
-            "current_display_index": self.current_display_index,
-            "current_page": self.current_page,
-            "fetch_count": self.fetch_count,
             "applied_filters": self.applied_filters,
             "trip_id": self.trip_id,
             "pickup_location": self.pickup_location,
@@ -65,6 +55,8 @@ class ConversationState(BaseModel):
             "customer_profile": self.customer_profile,
             "last_bot_response": self.last_bot_response,
             "tool_calls": self.tool_calls,
+            "booking_status": self.booking_status,
+            "drivers_notified": self.drivers_notified,
         }
 
     @classmethod
@@ -75,11 +67,6 @@ class ConversationState(BaseModel):
     def reset(self) -> None:
         """Reset the conversation state"""
         self.chat_history = []
-        self.all_fetched_drivers = []
-        self.filtered_drivers = []
-        self.current_display_index = 0
-        self.current_page = 1
-        self.fetch_count = 0
         self.applied_filters = {}
         self.trip_id = None
         self.pickup_location = None
@@ -89,3 +76,5 @@ class ConversationState(BaseModel):
         self.end_date = None
         self.last_bot_response = None
         self.tool_calls = []
+        self.booking_status = None
+        self.drivers_notified = 0

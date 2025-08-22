@@ -1,5 +1,5 @@
 # services/redis_service.py
-"""Async Redis service for session and state management"""
+"""Async Redis service for session and state management - FIXED for new flow"""
 
 import redis.asyncio as redis
 import pickle
@@ -170,18 +170,13 @@ class AsyncRedisSessionManager:
         return f"cab_bot:messages:{user_id}"
 
     def _serialize_state(self, state: ConversationState) -> bytes:
-        """Serialize ConversationState to bytes for Redis storage"""
-        # Convert state to dict
+        """Serialize ConversationState to bytes for Redis storage - FIXED for new flow"""
+        # Convert state to dict - ONLY include fields that exist in new state model
         state_dict = {
             "chat_history": [
                 self.message_serializer.serialize_message(msg)
                 for msg in state.chat_history
             ],
-            "all_fetched_drivers": state.all_fetched_drivers,
-            "filtered_drivers": state.filtered_drivers,
-            "current_display_index": state.current_display_index,
-            "current_page": state.current_page,
-            "fetch_count": state.fetch_count,
             "applied_filters": state.applied_filters,
             "trip_id": state.trip_id,
             "pickup_location": state.pickup_location,
@@ -195,6 +190,8 @@ class AsyncRedisSessionManager:
             "customer_profile": state.customer_profile,
             "last_bot_response": state.last_bot_response,
             "tool_calls": state.tool_calls,
+            "booking_status": state.booking_status,
+            "drivers_notified": state.drivers_notified,
             "last_activity": datetime.now().isoformat(),
         }
 
@@ -202,7 +199,7 @@ class AsyncRedisSessionManager:
         return pickle.dumps(state_dict)
 
     def _deserialize_state(self, data: bytes) -> ConversationState:
-        """Deserialize bytes from Redis to ConversationState"""
+        """Deserialize bytes from Redis to ConversationState - FIXED for new flow"""
         state_dict = pickle.loads(data)
 
         # Reconstruct chat history
@@ -211,14 +208,9 @@ class AsyncRedisSessionManager:
             for msg_dict in state_dict.get("chat_history", [])
         ]
 
-        # Create ConversationState
+        # Create ConversationState - ONLY with fields that exist in new model
         state = ConversationState(
             chat_history=chat_history,
-            all_fetched_drivers=state_dict.get("all_fetched_drivers", []),
-            filtered_drivers=state_dict.get("filtered_drivers", []),
-            current_display_index=state_dict.get("current_display_index", 0),
-            current_page=state_dict.get("current_page", 1),
-            fetch_count=state_dict.get("fetch_count", 0),
             applied_filters=state_dict.get("applied_filters", {}),
             trip_id=state_dict.get("trip_id"),
             pickup_location=state_dict.get("pickup_location"),
@@ -231,7 +223,9 @@ class AsyncRedisSessionManager:
             customer_phone=state_dict.get("customer_phone"),
             customer_profile=state_dict.get("customer_profile"),
             last_bot_response=state_dict.get("last_bot_response"),
-            tool_calls=state_dict.get("tool_calls", [])
+            tool_calls=state_dict.get("tool_calls", []),
+            booking_status=state_dict.get("booking_status"),
+            drivers_notified=state_dict.get("drivers_notified", 0)
         )
 
         return state
@@ -320,6 +314,7 @@ class AsyncRedisSessionManager:
                 return False
 
     async def is_duplicate_message(self, user_id: str, message: str, timestamp: str) -> bool:
+        """Check if message is duplicate"""
         async with self.get_redis() as r:
             if not r:
                 return False
