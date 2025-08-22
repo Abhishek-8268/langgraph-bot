@@ -218,18 +218,31 @@ async def process_message_async(user_id: str, message: str, customer_details: di
             return "Sorry, I had a technical issue. Please try again."
 
         # Update the Pydantic state model from the result - ONLY UPDATE FIELDS THAT EXIST
+        # IMPORTANT: Update ALL fields, including those set during agent_node execution
         state_model.chat_history = result.get("chat_history", state_model.chat_history)
         state_model.applied_filters = result.get("applied_filters", state_model.applied_filters)
-        state_model.trip_id = result.get("trip_id", state_model.trip_id)
-        state_model.pickup_location = result.get("pickup_location", state_model.pickup_location)
-        state_model.drop_location = result.get("drop_location", state_model.drop_location)
-        state_model.trip_type = result.get("trip_type", state_model.trip_type)
-        state_model.start_date = result.get("start_date", state_model.start_date)
-        state_model.end_date = result.get("end_date", state_model.end_date)
+
+        # Update trip details - these might be set in agent_node even without tool calls
+        if result.get("trip_id") is not None:
+            state_model.trip_id = result.get("trip_id")
+        if result.get("pickup_location") is not None:
+            state_model.pickup_location = result.get("pickup_location")
+        if result.get("drop_location") is not None:
+            state_model.drop_location = result.get("drop_location")
+        if result.get("trip_type") is not None:
+            state_model.trip_type = result.get("trip_type")
+        if result.get("start_date") is not None:
+            state_model.start_date = result.get("start_date")
+        if result.get("end_date") is not None:
+            state_model.end_date = result.get("end_date")
+
         state_model.last_bot_response = result.get("last_bot_response", state_model.last_bot_response)
         state_model.tool_calls = result.get("tool_calls", state_model.tool_calls)
-        state_model.booking_status = result.get("booking_status", state_model.booking_status)
-        state_model.drivers_notified = result.get("drivers_notified", state_model.drivers_notified)
+
+        if result.get("booking_status") is not None:
+            state_model.booking_status = result.get("booking_status")
+        if result.get("drivers_notified") is not None:
+            state_model.drivers_notified = result.get("drivers_notified")
 
         # Save updated state to Redis
         await save_user_state(user_id, state_model)

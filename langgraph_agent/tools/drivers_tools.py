@@ -1,5 +1,5 @@
 # langgraph_agent/tools/drivers_tools.py
-"""Refactored driver tools for streamlined flow"""
+"""Refactored driver tools for streamlined flow with proper API separation"""
 
 import logging
 from typing import Dict, Any, Optional
@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from services import api_client
 import config
 
+# Configure detailed logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -37,11 +39,18 @@ def create_trip_and_check_availability(
     Returns:
         A dictionary with the operation status and details.
     """
-    logger.info(
-        f"Creating trip and checking availability: {pickup_city} to {drop_city} ({trip_type})"
-    )
+    logger.info("="*50)
+    logger.info("STARTING TRIP CREATION AND AVAILABILITY CHECK")
+    logger.info(f"Route: {pickup_city} to {drop_city}")
+    logger.info(f"Trip Type: {trip_type}")
+    logger.info(f"Customer: {customer_details.get('name')} (ID: {customer_details.get('id')})")
+    logger.info(f"Dates - Start: {start_date}, Return: {return_date}")
+    logger.info(f"Filters: {filters}")
+    logger.info("="*50)
 
-    # Step 1: Create the trip
+    # STEP 1: CREATE THE TRIP
+    logger.info("\n📝 STEP 1: Creating Trip...")
+
     def format_date_for_api(date_str):
         """Convert YYYY-MM-DD to ISO format with current time"""
         try:
@@ -52,9 +61,11 @@ def create_trip_and_check_availability(
                 current_time.hour, current_time.minute, current_time.second,
                 tzinfo=timezone.utc
             )
-            return dt_with_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            formatted = dt_with_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            logger.info(f"  Formatted date: {date_str} -> {formatted}")
+            return formatted
         except (ValueError, TypeError) as e:
-            logger.error(f"Error parsing date {date_str}: {e}")
+            logger.error(f"  ❌ Error parsing date {date_str}: {e}")
             return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
     # Format dates for API
@@ -62,6 +73,7 @@ def create_trip_and_check_availability(
 
     if trip_type.lower() == "round-trip":
         if not return_date:
+            logger.error("  ❌ Return date missing for round-trip")
             return {
                 "status": "error",
                 "message": "Return date is required for a round-trip."
@@ -69,6 +81,10 @@ def create_trip_and_check_availability(
         formatted_end_date = format_date_for_api(return_date)
     else:
         formatted_end_date = formatted_start_date
+
+    logger.info(f"  Calling CREATE_TRIP API...")
+    logger.info(f"  URL: {config.CREATE_TRIP_URL}")
+    logger.info(f"  Payload: pickup={pickup_city}, drop={drop_city}, type={trip_type}")
 
     # Call trip creation API
     trip_data = api_client.create_trip(
@@ -80,49 +96,56 @@ def create_trip_and_check_availability(
         formatted_end_date
     )
 
-    if not trip_data or "tripId" not in trip_data:
-        logger.error("Failed to create trip")
+    if not trip_data:
+        logger.error("  ❌ TRIP CREATION FAILED: No response from API")
+        return {
+            "status": "error",
+            "message": "Failed to create the trip. Please try again in a moment."
+        }
+
+    if "tripId" not in trip_data:
+        logger.error(f"  ❌ TRIP CREATION FAILED: No tripId in response: {trip_data}")
         return {
             "status": "error",
             "message": "Failed to create the trip. Please try again in a moment."
         }
 
     trip_id = trip_data.get("tripId")
-    logger.info(f"Trip created successfully with ID: {trip_id}")
+    logger.info(f"  ✅ TRIP CREATED SUCCESSFULLY!")
+    logger.info(f"  Trip ID: {trip_id}")
 
-    # Step 2: Get drivers based on filters/preferences
+    # STEP 2: GET DRIVERS BASED ON FILTERS/PREFERENCES
+    logger.info(f"\n🚗 STEP 2: Fetching Drivers from {pickup_city}...")
+
     processed_filters = process_filter_types(filters) if filters else None
+    logger.info(f"  Processed filters: {processed_filters}")
 
     # Fetch multiple pages to get enough drivers (up to 100)
     all_drivers = []
-    for page in range(1, 6):  # Max 5 pages (100 drivers)
-        drivers_data = api_client.get_drivers(
+
+    drivers_data = api_client.get_drivers(
             pickup_city,
-            page,
+            1,
             config.DRIVERS_PER_FETCH,
             processed_filters
         )
-
-        if not drivers_data:
-            break
-
-        all_drivers.extend(drivers_data)
-
-        if len(drivers_data) < config.DRIVERS_PER_FETCH:
-            break  # No more drivers available
+    all_drivers.extend(drivers_data)
 
     if not all_drivers:
-        logger.warning(f"No drivers found for {pickup_city} with filters {processed_filters}")
+        logger.warning(f"  ⚠️ NO DRIVERS FOUND for {pickup_city} with filters {processed_filters}")
         return {
             "status": "partial_success",
             "message": "Trip created but no drivers available currently. We'll notify you when drivers become available.",
             "trip_id": trip_id
         }
 
-    logger.info(f"Found {len(all_drivers)} drivers, sending availability requests")
+    logger.info(f"  ✅ Total drivers found: {len(all_drivers)}")
 
-    # Step 3: Send availability request to all found drivers
+    # STEP 3: SEND AVAILABILITY REQUEST TO ALL FOUND DRIVERS
+    logger.info(f"\n📤 STEP 3: Sending Availability Requests...")
+
     driver_ids = [driver["id"] for driver in all_drivers]
+    logger.info(f"  Driver IDs to notify: {driver_ids[:5]}... (showing first 5 of {len(driver_ids)})")
 
     # Prepare trip details for availability check
     trip_details = {
@@ -134,6 +157,8 @@ def create_trip_and_check_availability(
         "trip_type": trip_type,
     }
 
+    logger.info(f"  Trip details for availability: {trip_details}")
+
     # Convert filters for availability API
     user_filters = {}
     if processed_filters:
@@ -142,8 +167,13 @@ def create_trip_and_check_availability(
                 user_filters[key] = "true" if value else "false"
             else:
                 user_filters[key] = value
+        logger.info(f"  User filters for availability: {user_filters}")
 
     # Send availability request
+    logger.info(f"  Calling SEND_AVAILABILITY API...")
+    logger.info(f"  URL: {config.SEND_AVAILABILITY_REQUEST_URL}")
+    logger.info(f"  Sending to {len(driver_ids)} drivers")
+
     availability_response = api_client.send_availability_request(
         trip_id,
         driver_ids,
@@ -153,17 +183,24 @@ def create_trip_and_check_availability(
     )
 
     if not availability_response:
-        logger.error("Failed to send availability requests")
+        logger.error("  ❌ AVAILABILITY REQUEST FAILED: No response from API")
         return {
             "status": "partial_success",
-            "message": "Trip created but couldn't notify drivers. Please try again.",
+            "message": f"Trip created (ID: {trip_id}) but couldn't notify drivers. Please try again.",
             "trip_id": trip_id
         }
 
     # Success - both trip creation and availability check completed
+    logger.info("  ✅ AVAILABILITY REQUESTS SENT SUCCESSFULLY!")
+    logger.info("="*50)
+    logger.info("COMPLETED: TRIP CREATED AND DRIVERS NOTIFIED")
+    logger.info(f"Trip ID: {trip_id}")
+    logger.info(f"Drivers Notified: {len(driver_ids)}")
+    logger.info("="*50)
+
     return {
         "status": "success",
-        "message": f"Trip created successfully! Notified {len(driver_ids)} drivers matching your preferences. You'll receive quotes shortly.",
+        "message": "I have notified drivers matching your preferences. You'll receive their quotations shortly.",
         "trip_id": trip_id,
         "drivers_notified": len(driver_ids),
         "filters_applied": bool(filters)
@@ -180,6 +217,7 @@ def process_filter_types(filters: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Processed filter dictionary with correct data types
     """
+    logger.info("  Processing filter types...")
     processed = {}
 
     integer_filters = {
@@ -204,6 +242,7 @@ def process_filter_types(filters: Dict[str, Any]) -> Dict[str, Any]:
         try:
             if key in integer_filters:
                 processed[key] = int(value)
+                logger.info(f"    {key}: {value} -> {processed[key]} (int)")
 
             elif key in boolean_filters:
                 if isinstance(value, bool):
@@ -212,16 +251,18 @@ def process_filter_types(filters: Dict[str, Any]) -> Dict[str, Any]:
                     processed[key] = value.lower() in ['true', '1', 'yes', 'on']
                 else:
                     processed[key] = bool(value)
+                logger.info(f"    {key}: {value} -> {processed[key]} (bool)")
 
             elif key in string_filters:
                 processed[key] = str(value)
+                logger.info(f"    {key}: {value} -> {processed[key]} (str)")
 
             else:
-                logger.warning(f"Unknown filter type for '{key}': {type(value)}")
+                logger.warning(f"    Unknown filter type for '{key}': {type(value)}")
                 processed[key] = value
 
         except (ValueError, TypeError) as e:
-            logger.error(f"Error processing filter '{key}' with value '{value}': {e}")
+            logger.error(f"    Error processing filter '{key}' with value '{value}': {e}")
             continue
 
     return processed
